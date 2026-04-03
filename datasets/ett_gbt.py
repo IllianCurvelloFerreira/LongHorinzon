@@ -28,7 +28,7 @@ def ensure_ett_csv(root_path: str | Path, data_name: str, cache_dir="./nixtla_ca
     preprocess_fn = None
 
     try:
-        from preprocess_ett import preprocess_ett_dataset
+        from .preprocess_ett import preprocess_ett_dataset
         preprocess_fn = preprocess_ett_dataset
     except ImportError:
         try:
@@ -36,11 +36,11 @@ def ensure_ett_csv(root_path: str | Path, data_name: str, cache_dir="./nixtla_ca
             preprocess_fn = preprocess_ett_dataset
         except ImportError:
             try:
-                from LongHorinzon.preprocess_ett import preprocess_ett_dataset
+                from .preprocess_ett import preprocess_ett_dataset
                 preprocess_fn = preprocess_ett_dataset
             except ImportError:
                 try:
-                    from LongHorinzon.datasets.preprocess_ett import preprocess_ett_dataset
+                    from datasets.preprocess_ett import preprocess_ett_dataset
                     preprocess_fn = preprocess_ett_dataset
                 except ImportError:
                     pass
