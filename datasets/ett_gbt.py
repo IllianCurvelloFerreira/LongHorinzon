@@ -28,19 +28,19 @@ def ensure_ett_csv(root_path: str | Path, data_name: str, cache_dir="./nixtla_ca
     preprocess_fn = None
 
     try:
-        from .preprocess_ett import preprocess_ett_dataset
+        from ..data_loader.preprocess_ett import preprocess_ett_dataset
         preprocess_fn = preprocess_ett_dataset
     except ImportError:
         try:
-            from datasets.preprocess_ett import preprocess_ett_dataset
+            from data_loader.preprocess_ett import preprocess_ett_dataset
             preprocess_fn = preprocess_ett_dataset
         except ImportError:
             try:
-                from .preprocess_ett import preprocess_ett_dataset
+                from ..data_loader.preprocess_ett import preprocess_ett_dataset
                 preprocess_fn = preprocess_ett_dataset
             except ImportError:
                 try:
-                    from datasets.preprocess_ett import preprocess_ett_dataset
+                    from data_loader.preprocess_ett import preprocess_ett_dataset
                     preprocess_fn = preprocess_ett_dataset
                 except ImportError:
                     pass
