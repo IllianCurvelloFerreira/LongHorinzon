@@ -8,8 +8,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.datasets.ett_gbt import ETTGBTDataset
-from src.models.gbt.model import GBTVanillaStandalone
+from datasets.ett_gbt import ETTGBTDataset
+from models.gbt.model import GBTVanillaStandalone
 
 
 @dataclass
