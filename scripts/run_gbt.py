@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from src.training.engine_gbt import run_experiment
-from src.utils.device import get_device
-from src.utils.seed import set_seed
+from training.engine_gbt import run_experiment
+from utils.device import get_device
+from utils.seed import set_seed
 
 
 def parse_args():

@@ -3,8 +3,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from src.models.gbt.blocks import CausalSelfAttentionBlock, FirstStage
-from src.models.gbt.embeddings import DataEmbedding
+from models.gbt.blocks import CausalSelfAttentionBlock, FirstStage
+from models.gbt.embeddings import DataEmbedding
 
 
 class GBTVanillaStandalone(nn.Module):
