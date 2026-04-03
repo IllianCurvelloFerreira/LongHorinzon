@@ -1,0 +1,111 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py,cover
+*.so
+
+# =========================
+# Virtual Environments
+# =========================
+.env
+.venv
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# =========================
+# Jupyter Notebook
+# =========================
+.ipynb_checkpoints
+
+# =========================
+# VSCode / IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Data (VERY IMPORTANT)
+# =========================
+data/
+!data/.gitkeep
+
+# =========================
+# Results / Experiments
+# =========================
+results/
+logs/
+checkpoints/
+outputs/
+
+# =========================
+# Model weights
+# =========================
+*.pt
+*.pth
+*.ckpt
+
+# =========================
+# Temporary files
+# =========================
+*.log
+*.tmp
+*.temp
+
+# =========================
+# Cache / ML artifacts
+# =========================
+.cache/
+*.cache
+wandb/
+mlruns/
+
+# =========================
+# Matplotlib / plots
+# =========================
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# =========================
+# CSV outputs (opcional)
+# =========================
+*.csv
+
+# =========================
+# PyTorch Lightning (se usar)
+# =========================
+lightning_logs/
+
+# =========================
+# Build
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# Config sensitive (if any)
+# =========================
+.env.local
+.env.*.local
+
+# =========================
+# Keep structure folders
+# =========================
+!data/ETT/
+!data/ETT/.gitkeep
+!results/.gitkeep
