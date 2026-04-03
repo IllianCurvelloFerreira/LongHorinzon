@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,63 @@ from sklearn.preprocessing import MaxAbsScaler, StandardScaler
 from torch.utils.data import Dataset
 
 
+# =========================================================
+# AUTO DOWNLOAD + PREPROCESS
+# =========================================================
+def ensure_ett_csv(root_path: str | Path, data_name: str, cache_dir="./nixtla_cache") -> Path:
+    root_path = Path(root_path)
+    root_path.mkdir(parents=True, exist_ok=True)
+
+    csv_path = root_path / f"{data_name}.csv"
+
+    if csv_path.exists():
+        return csv_path
+
+    print(f"[INFO] {csv_path} não encontrado. Gerando automaticamente...")
+
+    # tentativa de import flexível
+    preprocess_fn = None
+
+    try:
+        from preprocess_ett import preprocess_ett_dataset
+        preprocess_fn = preprocess_ett_dataset
+    except ImportError:
+        try:
+            from datasets.preprocess_ett import preprocess_ett_dataset
+            preprocess_fn = preprocess_ett_dataset
+        except ImportError:
+            try:
+                from LongHorinzon.preprocess_ett import preprocess_ett_dataset
+                preprocess_fn = preprocess_ett_dataset
+            except ImportError:
+                try:
+                    from LongHorinzon.datasets.preprocess_ett import preprocess_ett_dataset
+                    preprocess_fn = preprocess_ett_dataset
+                except ImportError:
+                    pass
+
+    if preprocess_fn is None:
+        raise ImportError(
+            "Não foi possível importar preprocess_ett_dataset. "
+            "Verifique o caminho do arquivo preprocess_ett.py."
+        )
+
+    preprocess_fn(
+        group=data_name,
+        data_dir=cache_dir,
+        out_dir=root_path,
+    )
+
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Falha ao gerar dataset: {csv_path}")
+
+    print(f"[OK] Dataset gerado em {csv_path}")
+    return csv_path
+
+
+# =========================================================
+# TIME FEATURES
+# =========================================================
 def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
     df_stamp = df_stamp.copy()
     df_stamp["date"] = pd.to_datetime(df_stamp["date"])
@@ -27,13 +85,9 @@ def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
     return df_stamp[cols].to_numpy(dtype=np.int64)
 
 
-def get_file_path(root_path: str | Path, data_name: str) -> str:
-    path = Path(root_path) / f"{data_name}.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo não encontrado: {path}")
-    return str(path)
-
-
+# =========================================================
+# BORDERS
+# =========================================================
 def get_borders(data_name: str, seq_len: int) -> tuple[list[int], list[int]]:
     if data_name in {"ETTh1", "ETTh2"}:
         train = 12 * 30 * 24
@@ -51,6 +105,9 @@ def get_borders(data_name: str, seq_len: int) -> tuple[list[int], list[int]]:
     return border1s, border2s
 
 
+# =========================================================
+# DATASET
+# =========================================================
 class ETTGBTDataset(Dataset):
     def __init__(
         self,
@@ -63,6 +120,7 @@ class ETTGBTDataset(Dataset):
         target: str = "OT",
         criterion: str = "Standard",
         use_time: bool = False,
+        cache_dir: str = "./nixtla_cache",  # 👈 novo
     ):
         assert flag in {"train", "val", "test"}
 
@@ -75,6 +133,7 @@ class ETTGBTDataset(Dataset):
         self.target = target
         self.criterion = criterion
         self.use_time = use_time
+        self.cache_dir = cache_dir
 
         self.scaler = None
         self.data_x = None
@@ -84,7 +143,12 @@ class ETTGBTDataset(Dataset):
         self._read_data()
 
     def _read_data(self) -> None:
-        file_path = get_file_path(self.root_path, self.data_name)
+        file_path = ensure_ett_csv(
+            self.root_path,
+            self.data_name,
+            cache_dir=self.cache_dir,
+        )
+
         df_raw = pd.read_csv(file_path)
 
         if "date" not in df_raw.columns:
