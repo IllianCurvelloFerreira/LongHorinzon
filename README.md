@@ -30,7 +30,7 @@ pip install -r requirements.txt
 Basic Example (ETTh1, Horizon=96)
 
 ```bash
-python scripts/run_gbt.py \
+python -m scripts/run_gbt.py \
   --model GBT \
   --root_path ./data/ETT \
   --data ETTh1 \

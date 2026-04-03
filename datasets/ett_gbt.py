@@ -36,7 +36,6 @@ def ensure_ett_csv(root_path: str | Path, data_name: str, cache_dir="./nixtla_ca
             preprocess_fn = preprocess_ett_dataset
         except ImportError:
             try:
-                from ..data_loader.preprocess_ett import preprocess_ett_dataset
                 preprocess_fn = preprocess_ett_dataset
             except ImportError:
                 try:
@@ -47,7 +46,6 @@ def ensure_ett_csv(root_path: str | Path, data_name: str, cache_dir="./nixtla_ca
 
     if preprocess_fn is None:
         raise ImportError(
-            "Não foi possível importar preprocess_ett_dataset. "
             "Verifique o caminho do arquivo preprocess_ett.py."
         )
 
@@ -120,7 +118,7 @@ class ETTGBTDataset(Dataset):
         target: str = "OT",
         criterion: str = "Standard",
         use_time: bool = False,
-        cache_dir: str = "./nixtla_cache",  # 👈 novo
+        cache_dir: str = "./nixtla_cache", 
     ):
         assert flag in {"train", "val", "test"}
 

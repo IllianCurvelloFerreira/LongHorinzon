@@ -1,16 +1,16 @@
 # Core
-numpy==1.26.4
-pandas==2.2.2
-scikit-learn==1.4.2
+numpy
+pandas
+scikit-learn
 
 # Deep Learning
-torch>=2.2.0
+torch
 
 # Time Series / Dataset
-datasetsforecast==0.0.8
+datasetsforecast
 
 # Utils
-tqdm==4.66.4
+tqdm
 
 # (Opcional, mas recomendado)
-matplotlib==3.8.4
+matplotlib
