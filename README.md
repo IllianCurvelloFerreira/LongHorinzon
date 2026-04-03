@@ -30,7 +30,7 @@ pip install -r requirements.txt
 Basic Example (ETTh1, Horizon=96)
 
 ```bash
-python -m scripts/run_gbt.py \
+!python -m scripts.run_gbt \
   --model GBT \
   --root_path ./data/ETT \
   --data ETTh1 \
@@ -41,10 +41,10 @@ python -m scripts/run_gbt.py \
   --s_layers 3,2,1 \
   --d_layers 2 \
   --itr 5 \
-  --learning_rate 0.00005 \
+  --learning_rate 0.0001 \
   --dropout 0.05 \
   --fd_model 32 \
   --d_model 512 \
-  --time \
-  --criterion Standard
+  --criterion Standard \
+  --train_epochs 1
 ```

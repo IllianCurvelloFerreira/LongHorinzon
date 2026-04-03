@@ -16,7 +16,7 @@ ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2"}
 
 
 def load_ett_long(data_dir: str | Path, group: str, normalize: bool = False) -> pd.DataFrame:
-    loaded = LongHorizon2.load(directory=str(data_dir), group=group, normalize=normalize)
+    loaded = LongHorizon2.load(directory=str(data_dir), group=group)
 
     df = loaded[0] if isinstance(loaded, tuple) else loaded
     df = df.copy()
