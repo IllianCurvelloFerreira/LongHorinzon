@@ -9,6 +9,10 @@ torch
 # Time Series / Dataset
 datasetsforecast
 
+# Statistical models
+statsmodels
+pmdarima
+
 # Utils
 tqdm
 
