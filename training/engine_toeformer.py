@@ -7,14 +7,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.datasets.ett_sliding_window import (
+from datasets.ett_sliding_window import (
     SlidingWindowDataset,
     load_univariate_series,
     train_val_test_split_time,
 )
-from src.models.toeformer.blocks import MovingAvgDecomp
-from src.models.toeformer.losses import toeformer_total_loss
-from src.models.toeformer.model import TOEformer
+from models.toeformer.blocks import MovingAvgDecomp
+from models.toeformer.losses import toeformer_total_loss
+from models.toeformer.model import TOEformer
 
 
 @dataclass
