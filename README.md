@@ -35,6 +35,7 @@ pip install -r requirements.txt
 
 # ⚙️ Running GBT
 
+```bash
 forecast-benchmark/
 ├── data/
 │   └── ETT/
@@ -62,6 +63,7 @@ forecast-benchmark/
 │
 ├── results/
 └── README.md
+```
 
 # 📦 Data
 
