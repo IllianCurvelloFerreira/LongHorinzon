@@ -122,7 +122,7 @@ Without LRVE:
 
 ```bash
 --lam2 0.0
-```bash
+```
 
 🔷 3. ARIMA / SARIMA
 
