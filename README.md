@@ -33,8 +33,6 @@ pip install -r requirements.txt
 ```
 # 📁 Project Structure
 
-# ⚙️ Running GBT
-
 ```bash
 forecast-benchmark/
 ├── data/
