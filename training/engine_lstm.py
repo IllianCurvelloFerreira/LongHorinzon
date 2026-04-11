@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 
 from datasets.ett_sliding_window import (
@@ -58,6 +59,16 @@ def build_loaders(args):
         val_ratio=args.val_ratio,
     )
 
+    # =========================================================
+    # NORMALIZAÇÃO CORRETA
+    # Fit apenas no TRAIN
+    # =========================================================
+    scaler = StandardScaler()
+
+    train_series = scaler.fit_transform(train_series)
+    val_series = scaler.transform(val_series)
+    test_series = scaler.transform(test_series)
+
     train_ds = SlidingWindowDataset(
         train_series,
         lookback=args.lookback,
@@ -99,13 +110,13 @@ def build_loaders(args):
         num_workers=args.num_workers,
     )
 
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, scaler
 
 
 def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     set_seed_fn(run_seed)
 
-    train_loader, val_loader, test_loader = build_loaders(args)
+    train_loader, val_loader, test_loader, scaler = build_loaders(args)
 
     model = LSTMForecaster(
         input_size=1,
