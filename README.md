@@ -34,33 +34,62 @@ pip install -r requirements.txt
 # 📁 Project Structure
 
 ```bash
-forecast-benchmark/
-├── data/
-│   └── ETT/
-│
-├── src/
-│   ├── data/
-│   ├── datasets/
-│   ├── models/
-│   │   ├── gbt/
-│   │   ├── toeformer/
-│   │   └── statistical/
-│   │       ├── arima.py
-│   │       └── sarima.py
-│   │
-│   ├── training/
-│   │   ├── engine_gbt.py
-│   │   ├── engine_toeformer.py
-│   │   └── engine_statistical.py
-│
-├── scripts/
-│   ├── run_gbt.py
-│   ├── run_toeformer.py
-│   ├── run_arima_sarima.py
-│   └── run_all_models.py
-│
-├── results/
-└── README.md
+src/
+┣ data/
+┣ datasets/
+┃ ┣ ett_gbt.py
+┃ ┣ ett_sliding_window.py
+┃ ┣ ett_univariate.py
+┃ ┗ __init__.py
+┣ data_loader/
+┃ ┣ download_ett.py
+┃ ┣ loaders.py
+┃ ┣ preprocess_ett.py
+┃ ┗ __init__.py
+┣ models/
+┃ ┣ gbt/
+┃ ┃ ┣ blocks.py
+┃ ┃ ┣ embeddings.py
+┃ ┃ ┗ model.py
+┃ ┣ lstm/
+┃ ┃ ┣ model.py
+┃ ┃ ┗ __init__.py
+┃ ┣ statistical/
+┃ ┃ ┣ arima.py
+┃ ┃ ┣ sarima.py
+┃ ┃ ┗ __init__.py
+┃ ┗ toeformer/
+┃   ┣ blocks.py
+┃   ┣ losses.py
+┃   ┗ model.py
+┣ notebooks/
+┃ ┣ analysis.ipynb
+┃ ┗ tables_and_plots.ipynb
+┣ results/
+┃ ┣ figures/
+┃ ┣ raw/
+┃ ┗ tables/
+┣ scripts/
+┃ ┣ prepare_ett.py
+┃ ┣ run_all_models.py
+┃ ┣ run_arima_sarima.py
+┃ ┣ run_gbt.py
+┃ ┣ run_lstm.py
+┃ ┣ run_tfdnet.py
+┃ ┣ run_toeformer.py
+┃ ┗ __init__.py
+┣ training/
+┃ ┣ engine_gbt.py
+┃ ┣ engine_lstm.py
+┃ ┣ engine_statistical.py
+┃ ┣ engine_toeformer.py
+┃ ┗ __init__.py
+┣ utils/
+┃ ┣ device.py
+┃ ┗ seed.py
+┣ .gitignore
+┣ README.md
+┗ requirements.txt
 ```
 
 # 📦 Data
