@@ -1,64 +1,177 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 
 import numpy as np
+import torch
+import torch.nn as nn
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader
 
-from training.engine_lstm import run_experiment
-from utils.device import get_device
-from utils.seed import set_seed
-
-
-ALL_DATASETS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2"]
-
-
-def parse_args():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--root_path", type=str, default="./data/ETT")
-    parser.add_argument("--data", type=str, default="ETTh1", choices=ALL_DATASETS)
-    parser.add_argument("--target", type=str, default="OT")
-
-    parser.add_argument("--lookback", type=int, default=336)
-    parser.add_argument("--horizon", type=int, default=96)
-    parser.add_argument("--stride", type=int, default=1)
-
-    parser.add_argument("--train_ratio", type=float, default=0.6)
-    parser.add_argument("--val_ratio", type=float, default=0.2)
-
-    parser.add_argument("--train_epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--learning_rate", type=float, default=1e-3)
-
-    parser.add_argument("--hidden_size", type=int, default=64)
-    parser.add_argument("--num_layers", type=int, default=2)
-    parser.add_argument("--dropout", type=float, default=0.1)
-
-    parser.add_argument("--itr", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=42)
-
-    return parser.parse_args()
+from datasets.ett_sliding_window import (
+    SlidingWindowDataset,
+    load_univariate_series,
+    train_val_test_split_time,
+)
+from models.lstm.model import LSTMForecaster
 
 
-def main():
-    args = parse_args()
-    device = get_device()
-
-    metrics_runs = []
-    for i in range(args.itr):
-        run_seed = args.seed + i
-        metrics_runs.append(run_experiment(args, run_seed, device=device, set_seed_fn=set_seed))
-
-    mse_mean = float(np.mean([m.mse for m in metrics_runs]))
-    mse_std = float(np.std([m.mse for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
-    mae_mean = float(np.mean([m.mae for m in metrics_runs]))
-    mae_std = float(np.std([m.mae for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
-
-    print("\n===== MÉDIA FINAL =====")
-    print(f"MSE: {mse_mean:.6f} ± {mse_std:.6f}")
-    print(f"MAE: {mae_mean:.6f} ± {mae_std:.6f}")
+@dataclass
+class Metrics:
+    mse: float
+    mae: float
 
 
-if __name__ == "__main__":
-    main()
+@torch.no_grad()
+def evaluate(model: nn.Module, loader: DataLoader, device: str) -> Metrics:
+    model.eval()
+
+    mse_sum = 0.0
+    mae_sum = 0.0
+    n = 0
+
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
+
+        pred = model(x)
+
+        mse_sum += nn.functional.mse_loss(pred, y, reduction="sum").item()
+        mae_sum += nn.functional.l1_loss(pred, y, reduction="sum").item()
+        n += y.numel()
+
+    return Metrics(
+        mse=mse_sum / n,
+        mae=mae_sum / n,
+    )
+
+
+def build_loaders(args):
+    series = load_univariate_series(
+        root_path=args.root_path,
+        data_name=args.data,
+        target_col=args.target,
+    )
+
+    train_series, val_series, test_series = train_val_test_split_time(
+        series,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+    )
+
+    # =========================================================
+    # NORMALIZAÇÃO CORRETA
+    # Fit apenas no TRAIN
+    # =========================================================
+    scaler = StandardScaler()
+
+    train_series = scaler.fit_transform(train_series)
+    val_series = scaler.transform(val_series)
+    test_series = scaler.transform(test_series)
+
+    train_ds = SlidingWindowDataset(
+        train_series,
+        lookback=args.lookback,
+        horizon=args.horizon,
+        stride=args.stride,
+    )
+    val_ds = SlidingWindowDataset(
+        val_series,
+        lookback=args.lookback,
+        horizon=args.horizon,
+        stride=args.stride,
+    )
+    test_ds = SlidingWindowDataset(
+        test_series,
+        lookback=args.lookback,
+        horizon=args.horizon,
+        stride=args.stride,
+    )
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=True,
+        num_workers=args.num_workers,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=args.num_workers,
+    )
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        drop_last=False,
+        num_workers=args.num_workers,
+    )
+
+    return train_loader, val_loader, test_loader, scaler
+
+
+def run_experiment(args, run_seed: int, device: str, set_seed_fn):
+    set_seed_fn(run_seed)
+
+    train_loader, val_loader, test_loader, scaler = build_loaders(args)
+
+    model = LSTMForecaster(
+        input_size=1,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        horizon=args.horizon,
+        dropout=args.dropout,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    criterion = nn.MSELoss()
+
+    best_val = float("inf")
+    best_state = None
+
+    print(
+        f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | device={device} ====="
+    )
+
+    for epoch in range(1, args.train_epochs + 1):
+        model.train()
+        train_losses = []
+
+        for x, y in train_loader:
+            x = x.to(device)
+            y = y.to(device)
+
+            pred = model(x)
+            loss = criterion(pred, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            train_losses.append(loss.item())
+
+        train_loss = float(np.mean(train_losses)) if train_losses else np.nan
+        val_metrics = evaluate(model, val_loader, device)
+
+        print(
+            f"Epoch {epoch:02d} | "
+            f"Train={train_loss:.6f} | "
+            f"Val MSE={val_metrics.mse:.6f} | "
+            f"Val MAE={val_metrics.mae:.6f}"
+        )
+
+        if val_metrics.mse < best_val:
+            best_val = val_metrics.mse
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    test_metrics = evaluate(model, test_loader, device)
+    print(f"TEST | MSE={test_metrics.mse:.6f} | MAE={test_metrics.mae:.6f}")
+
+    return test_metrics
