@@ -87,8 +87,10 @@ class GBTVanillaStandalone(nn.Module):
         x_mark_dec: torch.Tensor,
         stage: str,
     ) -> torch.Tensor:
-        label_x = x_dec[:, :self.label_len, :]
-        label_mark = x_mark_dec[:, :self.label_len, :] if x_mark_dec.shape[-1] > 0 else x_mark_dec
+        # First stage agora usa a entrada do encoder.
+        # Isso mantém coerência no univariado e habilita o multivariado.
+        label_x = x_enc[:, -self.label_len:, :]
+        label_mark = x_mark_enc[:, -self.label_len:, :] if x_mark_enc.shape[-1] > 0 else x_mark_enc
 
         base = self.first_stage(label_x, label_mark)
 
@@ -96,7 +98,12 @@ class GBTVanillaStandalone(nn.Module):
             return base
 
         base_detached = base.detach()
-        future_mark = x_mark_dec[:, -self.pred_len:, :] if x_mark_dec.shape[-1] > 0 else x_mark_dec[:, -self.pred_len:, :]
+        future_mark = (
+            x_mark_dec[:, -self.pred_len:, :]
+            if x_mark_dec.shape[-1] > 0
+            else x_mark_dec[:, -self.pred_len:, :]
+        )
+
         h = self.second_embed(base_detached, future_mark)
 
         for block in self.second_stage:

@@ -1,11 +1,6 @@
-#========================================================================
-#  Script to run GBT experiments on the ETT dataset on univariate series.
-#========================================================================
-
 from __future__ import annotations
 
 import argparse
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -19,9 +14,20 @@ def parse_args():
 
     parser.add_argument("--model", type=str, default="GBT")
     parser.add_argument("--root_path", type=str, default="./data/ETT")
+    parser.add_argument("--data_dir", type=str, default="./nixtla_cache")
     parser.add_argument("--data", type=str, default="ETTh1", choices=["ETTh1", "ETTh2", "ETTm1", "ETTm2"])
-    parser.add_argument("--features", type=str, default="S")
     parser.add_argument("--target", type=str, default="OT")
+
+    # novo: modo de entrada
+    parser.add_argument(
+        "--input_mode",
+        type=str,
+        default="univariate",
+        choices=["univariate", "multivariate"],
+    )
+
+    # mantido por compatibilidade com seu comando atual
+    parser.add_argument("--features", type=str, default="S")
 
     parser.add_argument("--seq_len", type=int, default=168)
     parser.add_argument("--label_len", type=int, default=168)
