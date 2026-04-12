@@ -23,13 +23,18 @@ class GBTVanillaStandalone(nn.Module):
         dropout: float,
         use_time: bool,
         with_minute: bool,
+        target_idx: int = 0,
+        input_mode: str = "univariate",
     ):
         super().__init__()
         self.label_len = label_len
         self.pred_len = pred_len
+        self.target_idx = target_idx
+        self.input_mode = input_mode
 
+        # Branch principal: sempre focada no alvo
         self.first_stage = FirstStage(
-            enc_in=enc_in,
+            enc_in=1,
             c_out=c_out,
             label_len=label_len,
             pred_len=pred_len,
@@ -39,6 +44,25 @@ class GBTVanillaStandalone(nn.Module):
             use_time=use_time,
             with_minute=with_minute,
         )
+
+        # Branch auxiliar para contexto multivariado
+        if input_mode == "multivariate":
+            self.context_embed = DataEmbedding(
+                c_in=enc_in,
+                d_model=d_model,
+                dropout=dropout,
+                use_position=False,
+                use_time=use_time,
+                with_minute=with_minute,
+            )
+            self.context_proj = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, c_out),
+            )
+        else:
+            self.context_embed = None
+            self.context_proj = None
 
         self.second_embed = DataEmbedding(
             c_in=dec_in,
@@ -58,6 +82,14 @@ class GBTVanillaStandalone(nn.Module):
         if stage == "first stage":
             for p in self.first_stage.parameters():
                 p.requires_grad = True
+
+            if self.context_embed is not None:
+                for p in self.context_embed.parameters():
+                    p.requires_grad = True
+            if self.context_proj is not None:
+                for p in self.context_proj.parameters():
+                    p.requires_grad = True
+
             for p in self.second_embed.parameters():
                 p.requires_grad = False
             for layer in self.second_stage:
@@ -69,6 +101,14 @@ class GBTVanillaStandalone(nn.Module):
         elif stage == "second stage":
             for p in self.first_stage.parameters():
                 p.requires_grad = False
+
+            if self.context_embed is not None:
+                for p in self.context_embed.parameters():
+                    p.requires_grad = False
+            if self.context_proj is not None:
+                for p in self.context_proj.parameters():
+                    p.requires_grad = False
+
             for p in self.second_embed.parameters():
                 p.requires_grad = True
             for layer in self.second_stage:
@@ -79,6 +119,30 @@ class GBTVanillaStandalone(nn.Module):
         else:
             raise ValueError("stage deve ser 'first stage' ou 'second stage'.")
 
+    def build_base_forecast(
+        self,
+        x_enc: torch.Tensor,
+        x_mark_enc: torch.Tensor,
+    ) -> torch.Tensor:
+        # histórico do alvo
+        target_x = x_enc[:, -self.label_len:, self.target_idx:self.target_idx + 1]
+        target_mark = x_mark_enc[:, -self.label_len:, :] if x_mark_enc.shape[-1] > 0 else x_mark_enc
+
+        base = self.first_stage(target_x, target_mark)
+
+        # contexto multivariado opcional
+        if self.input_mode == "multivariate":
+            context_x = x_enc[:, -self.label_len:, :]
+            context_mark = x_mark_enc[:, -self.label_len:, :] if x_mark_enc.shape[-1] > 0 else x_mark_enc
+
+            ctx = self.context_embed(context_x, context_mark)    # [B, L, D]
+            ctx = ctx[:, -self.pred_len:, :]                     # [B, pred_len, D]
+            ctx = self.context_proj(ctx)                         # [B, pred_len, 1]
+
+            base = base + ctx
+
+        return base
+
     def forward(
         self,
         x_enc: torch.Tensor,
@@ -87,12 +151,7 @@ class GBTVanillaStandalone(nn.Module):
         x_mark_dec: torch.Tensor,
         stage: str,
     ) -> torch.Tensor:
-        # First stage agora usa a entrada do encoder.
-        # Isso mantém coerência no univariado e habilita o multivariado.
-        label_x = x_enc[:, -self.label_len:, :]
-        label_mark = x_mark_enc[:, -self.label_len:, :] if x_mark_enc.shape[-1] > 0 else x_mark_enc
-
-        base = self.first_stage(label_x, label_mark)
+        base = self.build_base_forecast(x_enc, x_mark_enc)
 
         if stage == "first stage":
             return base

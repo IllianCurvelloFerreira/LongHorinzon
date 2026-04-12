@@ -50,6 +50,9 @@ def ensure_ett_csv(
     target_col: str = "OT",
     data_dir: str | Path = "./nixtla_cache",
 ) -> Path:
+    """
+    Garante que o CSV univariado exista.
+    """
     root_path = Path(root_path)
     csv_path = root_path / f"{data_name}.csv"
 
@@ -64,7 +67,9 @@ def ensure_ett_csv(
         )
 
     if not csv_path.exists():
-        raise FileNotFoundError(f"Arquivo não encontrado mesmo após preprocessamento: {csv_path}")
+        raise FileNotFoundError(
+            f"Arquivo não encontrado mesmo após preprocessamento: {csv_path}"
+        )
 
     return csv_path
 
@@ -74,6 +79,10 @@ def ensure_ett_multivariate_csv(
     data_name: str,
     data_dir: str | Path = "./nixtla_cache",
 ) -> Path:
+    """
+    Garante que o CSV multivariado exista.
+    Salva: date + todas as variáveis.
+    """
     root_path = Path(root_path)
     csv_path = root_path / f"{data_name}_multivariate.csv"
 
@@ -98,27 +107,11 @@ def ensure_ett_multivariate_csv(
         print(f"[OK] {data_name} salvo em {csv_path}")
 
     if not csv_path.exists():
-        raise FileNotFoundError(f"Arquivo não encontrado mesmo após geração multivariada: {csv_path}")
+        raise FileNotFoundError(
+            f"Arquivo não encontrado mesmo após geração multivariada: {csv_path}"
+        )
 
     return csv_path
-
-
-def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
-    df_stamp = df_stamp.copy()
-    df_stamp["date"] = pd.to_datetime(df_stamp["date"])
-
-    df_stamp["month"] = df_stamp["date"].dt.month
-    df_stamp["day"] = df_stamp["date"].dt.day
-    df_stamp["weekday"] = df_stamp["date"].dt.weekday
-    df_stamp["hour"] = df_stamp["date"].dt.hour
-
-    if data_name in {"ETTm1", "ETTm2"}:
-        df_stamp["minute"] = (df_stamp["date"].dt.minute // 15).astype(int)
-        cols = ["month", "day", "weekday", "hour", "minute"]
-    else:
-        cols = ["month", "day", "weekday", "hour"]
-
-    return df_stamp[cols].to_numpy(dtype=np.int64)
 
 
 def get_file_path(
@@ -143,6 +136,24 @@ def get_file_path(
         raise ValueError("input_mode deve ser 'univariate' ou 'multivariate'.")
 
     return str(path)
+
+
+def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
+    df_stamp = df_stamp.copy()
+    df_stamp["date"] = pd.to_datetime(df_stamp["date"])
+
+    df_stamp["month"] = df_stamp["date"].dt.month
+    df_stamp["day"] = df_stamp["date"].dt.day
+    df_stamp["weekday"] = df_stamp["date"].dt.weekday
+    df_stamp["hour"] = df_stamp["date"].dt.hour
+
+    if data_name in {"ETTm1", "ETTm2"}:
+        df_stamp["minute"] = (df_stamp["date"].dt.minute // 15).astype(int)
+        cols = ["month", "day", "weekday", "hour", "minute"]
+    else:
+        cols = ["month", "day", "weekday", "hour"]
+
+    return df_stamp[cols].to_numpy(dtype=np.int64)
 
 
 def get_borders(data_name: str, seq_len: int) -> tuple[list[int], list[int]]:
@@ -196,18 +207,22 @@ class ETTGBTDataset(Dataset):
         self.data_x = None
         self.data_y = None
         self.data_stamp = None
+
         self.enc_in = None
         self.c_out = 1
+        self.x_cols = None
+        self.y_cols = [target]
 
         self._read_data()
 
     def _read_data(self) -> None:
         file_path = get_file_path(
-            self.root_path,
-            self.data_name,
+            root_path=self.root_path,
+            data_name=self.data_name,
             input_mode=self.input_mode,
             data_dir=self.data_dir,
         )
+
         df_raw = pd.read_csv(file_path)
 
         if "date" not in df_raw.columns:
@@ -225,6 +240,7 @@ class ETTGBTDataset(Dataset):
         df_x = df_raw[x_cols].copy()
         df_y = df_raw[y_cols].copy()
 
+        self.x_cols = x_cols
         self.enc_in = df_x.shape[1]
 
         border1s, border2s = get_borders(self.data_name, self.seq_len)
@@ -232,6 +248,7 @@ class ETTGBTDataset(Dataset):
         border1 = border1s[set_type]
         border2 = border2s[set_type]
 
+        # Fit dos scalers apenas no treino
         train_x = df_x.iloc[border1s[0]:border2s[0]].values.astype(np.float32)
         full_x = df_x.values.astype(np.float32)
 
@@ -253,8 +270,8 @@ class ETTGBTDataset(Dataset):
         scaled_x = self.scaler_x.transform(full_x).astype(np.float32)
         scaled_y = self.scaler_y.transform(full_y).astype(np.float32)
 
-        self.data_x = scaled_x[border1:border2]
-        self.data_y = scaled_y[border1:border2]
+        self.data_x = scaled_x[border1:border2]  # [T_split, enc_in]
+        self.data_y = scaled_y[border1:border2]  # [T_split, 1]
 
         if self.use_time:
             df_stamp = df_raw[["date"]].iloc[border1:border2].copy()
@@ -273,8 +290,8 @@ class ETTGBTDataset(Dataset):
         r_begin = s_end - self.label_len
         r_end = r_begin + self.label_len + self.pred_len
 
-        seq_x = self.data_x[s_begin:s_end]             # [seq_len, enc_in]
-        seq_y = self.data_y[r_begin:r_end]             # [label_len+pred_len, 1]
+        seq_x = self.data_x[s_begin:s_end]          # [seq_len, enc_in]
+        seq_y = self.data_y[r_begin:r_end]          # [label_len + pred_len, 1]
         seq_x_mark = self.data_stamp[s_begin:s_end]
         seq_y_mark = self.data_stamp[r_begin:r_end]
 
@@ -286,6 +303,10 @@ class ETTGBTDataset(Dataset):
         )
 
     def inverse_transform_y(self, arr: np.ndarray) -> np.ndarray:
+        """
+        Inverte apenas a escala da saída alvo.
+        arr shape esperado: [B, pred_len, 1]
+        """
         shape = arr.shape
         flat = arr.reshape(-1, shape[-1])
         inv = self.scaler_y.inverse_transform(flat)

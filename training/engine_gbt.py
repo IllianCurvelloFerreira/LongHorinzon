@@ -23,11 +23,23 @@ def parse_s_layers(text: str) -> list[int]:
 
 
 def make_decoder_input(batch_y: torch.Tensor, label_len: int, pred_len: int) -> torch.Tensor:
+    """
+    batch_y: [B, label_len + pred_len, 1]
+    retorna:
+        [B, label_len + pred_len, 1]
+    """
     zeros = torch.zeros(batch_y.size(0), pred_len, batch_y.size(-1), device=batch_y.device)
     return torch.cat([batch_y[:, :label_len, :], zeros], dim=1)
 
 
-def process_batch(model: nn.Module, batch, label_len: int, pred_len: int, device: str, stage: str):
+def process_batch(
+    model: nn.Module,
+    batch,
+    label_len: int,
+    pred_len: int,
+    device: str,
+    stage: str,
+):
     batch_x, batch_y, batch_x_mark, batch_y_mark = batch
 
     batch_x = batch_x.to(device)
@@ -36,7 +48,15 @@ def process_batch(model: nn.Module, batch, label_len: int, pred_len: int, device
     batch_y_mark = batch_y_mark.to(device)
 
     dec_inp = make_decoder_input(batch_y, label_len, pred_len)
-    pred = model(batch_x, batch_x_mark, dec_inp, batch_y_mark, stage=stage)
+
+    pred = model(
+        x_enc=batch_x,
+        x_mark_enc=batch_x_mark,
+        x_dec=dec_inp,
+        x_mark_dec=batch_y_mark,
+        stage=stage,
+    )
+
     true = batch_y[:, -pred_len:, :]
 
     return pred, true
@@ -45,11 +65,19 @@ def process_batch(model: nn.Module, batch, label_len: int, pred_len: int, device
 @torch.no_grad()
 def evaluate_loss(model, loader, criterion, args, device, stage: str):
     model.eval()
+
     mse_losses = []
     mae_losses = []
 
     for batch in loader:
-        pred, true = process_batch(model, batch, args.label_len, args.pred_len, device, stage)
+        pred, true = process_batch(
+            model=model,
+            batch=batch,
+            label_len=args.label_len,
+            pred_len=args.pred_len,
+            device=device,
+            stage=stage,
+        )
 
         mse = criterion(pred, true)
         mae = torch.mean(torch.abs(pred - true))
@@ -59,6 +87,7 @@ def evaluate_loss(model, loader, criterion, args, device, stage: str):
 
     mean_mse = float(np.mean(mse_losses)) if mse_losses else np.nan
     mean_mae = float(np.mean(mae_losses)) if mae_losses else np.nan
+
     return mean_mse, mean_mae
 
 
@@ -79,10 +108,20 @@ def train_one_stage(model, train_loader, val_loader, args, device: str, stage: s
 
         for batch in train_loader:
             optimizer.zero_grad()
-            pred, true = process_batch(model, batch, args.label_len, args.pred_len, device, stage)
+
+            pred, true = process_batch(
+                model=model,
+                batch=batch,
+                label_len=args.label_len,
+                pred_len=args.pred_len,
+                device=device,
+                stage=stage,
+            )
+
             loss = criterion(pred, true)
             loss.backward()
             optimizer.step()
+
             train_losses.append(loss.item())
 
         train_loss = float(np.mean(train_losses)) if train_losses else np.nan
@@ -111,10 +150,20 @@ def train_one_stage(model, train_loader, val_loader, args, device: str, stage: s
 @torch.no_grad()
 def test_model(model, test_loader, test_ds, args, device: str, stage: str) -> Metrics:
     model.eval()
-    preds, trues = [], []
+
+    preds = []
+    trues = []
 
     for batch in test_loader:
-        pred, true = process_batch(model, batch, args.label_len, args.pred_len, device, stage)
+        pred, true = process_batch(
+            model=model,
+            batch=batch,
+            label_len=args.label_len,
+            pred_len=args.pred_len,
+            device=device,
+            stage=stage,
+        )
+
         preds.append(pred.detach().cpu().numpy())
         trues.append(true.detach().cpu().numpy())
 
@@ -127,6 +176,7 @@ def test_model(model, test_loader, test_ds, args, device: str, stage: str) -> Me
 
     mse = float(np.mean((preds - trues) ** 2))
     mae = float(np.mean(np.abs(preds - trues)))
+
     return Metrics(mse=mse, mae=mae)
 
 
@@ -144,6 +194,7 @@ def build_loaders(args):
         input_mode=args.input_mode,
         data_dir=args.data_dir,
     )
+
     val_ds = ETTGBTDataset(
         root_path=args.root_path,
         data_name=args.data,
@@ -157,6 +208,7 @@ def build_loaders(args):
         input_mode=args.input_mode,
         data_dir=args.data_dir,
     )
+
     test_ds = ETTGBTDataset(
         root_path=args.root_path,
         data_name=args.data,
@@ -178,6 +230,7 @@ def build_loaders(args):
         drop_last=True,
         num_workers=args.num_workers,
     )
+
     val_loader = DataLoader(
         val_ds,
         batch_size=args.batch_size,
@@ -185,6 +238,7 @@ def build_loaders(args):
         drop_last=False,
         num_workers=args.num_workers,
     )
+
     test_loader = DataLoader(
         test_ds,
         batch_size=args.batch_size,
@@ -196,16 +250,46 @@ def build_loaders(args):
     return train_ds, val_ds, test_ds, train_loader, val_loader, test_loader
 
 
+def resolve_target_idx(train_ds, args) -> int:
+    """
+    Requer que o dataset revise e exponha:
+        self.x_cols = x_cols
+
+    No univariado:
+        x_cols = [OT]
+        target_idx = 0
+
+    No multivariado:
+        target_idx = índice da coluna OT dentro de x_cols
+    """
+    if args.input_mode == "univariate":
+        return 0
+
+    if not hasattr(train_ds, "x_cols"):
+        raise AttributeError(
+            "ETTGBTDataset precisa expor 'self.x_cols' para o modo multivariado. "
+            "Adicione no dataset: self.x_cols = x_cols"
+        )
+
+    if args.target not in train_ds.x_cols:
+        raise ValueError(
+            f"Target '{args.target}' não encontrado em train_ds.x_cols={train_ds.x_cols}"
+        )
+
+    return train_ds.x_cols.index(args.target)
+
+
 def run_experiment(args, run_seed: int, device: str, set_seed_fn) -> Metrics:
     set_seed_fn(run_seed)
 
-    _, _, test_ds, train_loader, val_loader, test_loader = build_loaders(args)
+    train_ds, _, test_ds, train_loader, val_loader, test_loader = build_loaders(args)
 
     s_layers = parse_s_layers(args.s_layers)
     with_minute = args.data in {"ETTm1", "ETTm2"}
 
-    enc_in = train_loader.dataset.enc_in
+    enc_in = train_ds.enc_in
     c_out = 1
+    target_idx = resolve_target_idx(train_ds, args)
 
     model = GBTVanillaStandalone(
         enc_in=enc_in,
@@ -221,6 +305,8 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn) -> Metrics:
         dropout=args.dropout,
         use_time=args.time,
         with_minute=with_minute,
+        target_idx=target_idx,
+        input_mode=args.input_mode,
     ).to(device)
 
     print(
@@ -228,12 +314,34 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn) -> Metrics:
         f"input_mode={args.input_mode} | device={device} ====="
     )
 
-    best_first = train_one_stage(model, train_loader, val_loader, args, device, stage="first stage")
+    best_first = train_one_stage(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        args=args,
+        device=device,
+        stage="first stage",
+    )
     model.load_state_dict(best_first)
 
-    best_second = train_one_stage(model, train_loader, val_loader, args, device, stage="second stage")
+    best_second = train_one_stage(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        args=args,
+        device=device,
+        stage="second stage",
+    )
     model.load_state_dict(best_second)
 
-    metrics = test_model(model, test_loader, test_ds, args, device, stage="second stage")
+    metrics = test_model(
+        model=model,
+        test_loader=test_loader,
+        test_ds=test_ds,
+        args=args,
+        device=device,
+        stage="second stage",
+    )
+
     print(f"Test | MSE: {metrics.mse:.6f} | MAE: {metrics.mae:.6f}")
     return metrics
