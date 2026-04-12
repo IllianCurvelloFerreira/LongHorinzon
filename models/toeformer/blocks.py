@@ -6,12 +6,6 @@ import torch.nn.functional as F
 
 
 class MovingAvgDecomp(nn.Module):
-    """
-    trend = AvgPool1d(replicate_pad(series))
-    seasonal = series - trend
-
-    x: [B, L, C]
-    """
     def __init__(self, kernel_size: int):
         super().__init__()
         self.kernel_size = kernel_size
@@ -27,12 +21,6 @@ class MovingAvgDecomp(nn.Module):
 
 
 class GlobalLocalConvEncoder(nn.Module):
-    """
-    Seasonal encoder:
-    - global conv
-    - local conv
-    - fuse
-    """
     def __init__(
         self,
         c_in: int,
@@ -51,7 +39,7 @@ class GlobalLocalConvEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.in_proj(x)  # [B, L, D]
-        h_t = h.transpose(1, 2)  # [B, D, L]
+        h_t = h.transpose(1, 2)
 
         g = self.drop(self.act(self.global_conv(h_t))).transpose(1, 2)
         l = self.drop(self.act(self.local_conv(h_t))).transpose(1, 2)
@@ -61,10 +49,6 @@ class GlobalLocalConvEncoder(nn.Module):
 
 
 class SeasonalDecoderCrossAttn(nn.Module):
-    """
-    queries from seasonal tail
-    keys/values from encoder output
-    """
     def __init__(
         self,
         c_out: int,
@@ -84,7 +68,7 @@ class SeasonalDecoderCrossAttn(nn.Module):
         self.out = nn.Linear(d_model, c_out)
 
     def forward(self, seasonal_tail: torch.Tensor, enc_out: torch.Tensor) -> torch.Tensor:
-        q = self.q_proj(seasonal_tail)  # [B, H, D]
+        q = self.q_proj(seasonal_tail)
         attn_out, _ = self.attn(q, enc_out, enc_out)
         h = attn_out + self.ffn(attn_out)
         y_season = self.out(h)

@@ -12,9 +12,6 @@ def lrve_loss(
     alpha: float = 0.6,
     eps: float = 1e-12,
 ):
-    """
-    Relative Value Exponential Loss
-    """
     se = y_season_true - y_season_pred
     te = y_trend_true - y_trend_pred
 

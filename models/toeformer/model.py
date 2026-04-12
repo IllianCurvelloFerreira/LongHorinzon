@@ -12,14 +12,18 @@ from models.toeformer.blocks import (
 
 class TOEformer(nn.Module):
     """
-    TOEformer-like:
-    - decompose x into seasonal/trend
-    - trend forecast by linear map
-    - seasonal forecast by conv encoder + cross-attention decoder
+    Entrada:
+        x: [B, L, C_in]
+
+    Saída:
+        y_hat: [B, H, 1]
     """
+
     def __init__(
         self,
         c_in: int,
+        c_out: int,
+        target_idx: int,
         lookback: int,
         horizon: int,
         d_model: int = 128,
@@ -31,13 +35,17 @@ class TOEformer(nn.Module):
     ):
         super().__init__()
         self.c_in = c_in
+        self.c_out = c_out
+        self.target_idx = target_idx
         self.lookback = lookback
         self.horizon = horizon
 
         self.decomp = MovingAvgDecomp(kernel_size=decomp_kernel)
 
+        # tendência só da variável alvo
         self.trend_linear = nn.Linear(lookback, horizon)
 
+        # encoder enxerga todas as variáveis
         self.season_encoder = GlobalLocalConvEncoder(
             c_in=c_in,
             d_model=d_model,
@@ -45,8 +53,10 @@ class TOEformer(nn.Module):
             k_local=k_local,
             dropout=dropout,
         )
+
+        # decoder prevê só OT
         self.season_decoder = SeasonalDecoderCrossAttn(
-            c_out=c_in,
+            c_out=c_out,
             d_model=d_model,
             n_heads=n_heads,
             dropout=dropout,
@@ -54,26 +64,31 @@ class TOEformer(nn.Module):
 
     def forward(self, x: torch.Tensor):
         """
-        x: [B, L, C]
+        x: [B, L, C_in]
         returns:
-          y_hat:    [B, H, C]
-          y_season: [B, H, C]
-          y_trend:  [B, H, C]
+          y_hat:    [B, H, 1]
+          y_season: [B, H, 1]
+          y_trend:  [B, H, 1]
         """
         seasonal, trend = self.decomp(x)
 
-        trend_t = trend.transpose(1, 2)      # [B, C, L]
-        y_trend = self.trend_linear(trend_t) # [B, C, H]
-        y_trend = y_trend.transpose(1, 2)    # [B, H, C]
+        # trend: só target
+        trend_target = trend[:, :, self.target_idx:self.target_idx + 1]  # [B, L, 1]
+        trend_t = trend_target.transpose(1, 2)                           # [B, 1, L]
+        y_trend = self.trend_linear(trend_t)                             # [B, 1, H]
+        y_trend = y_trend.transpose(1, 2)                                # [B, H, 1]
 
-        tail_len = min(self.horizon, seasonal.shape[1])
-        seasonal_tail = seasonal[:, -tail_len:, :]
-        enc_out = self.season_encoder(seasonal)
-        y_season = self.season_decoder(seasonal_tail, enc_out)
+        # seasonal: query só target, contexto de todas as variáveis
+        seasonal_target = seasonal[:, :, self.target_idx:self.target_idx + 1]  # [B, L, 1]
+        tail_len = min(self.horizon, seasonal_target.shape[1])
+        seasonal_tail = seasonal_target[:, -tail_len:, :]  # [B, tail_len, 1]
+
+        enc_out = self.season_encoder(seasonal)  # [B, L, D]
+        y_season = self.season_decoder(seasonal_tail, enc_out)  # [B, tail_len, 1]
 
         if tail_len < self.horizon:
             pad = torch.zeros(
-                (x.size(0), self.horizon - tail_len, self.c_in),
+                (x.size(0), self.horizon - tail_len, self.c_out),
                 device=x.device,
                 dtype=x.dtype,
             )
