@@ -1,3 +1,7 @@
+#========================================================================
+#  Script to run GBT experiments on the ETT dataset on univariate series.
+#========================================================================
+
 from __future__ import annotations
 
 import argparse
