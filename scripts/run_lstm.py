@@ -16,8 +16,16 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--root_path", type=str, default="./data/ETT")
+    parser.add_argument("--data_dir", type=str, default="./nixtla_cache")
     parser.add_argument("--data", type=str, default="ETTh1", choices=ALL_DATASETS)
     parser.add_argument("--target", type=str, default="OT")
+
+    parser.add_argument(
+        "--input_mode",
+        type=str,
+        default="univariate",
+        choices=["univariate", "multivariate"],
+    )
 
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--horizon", type=int, default=96)

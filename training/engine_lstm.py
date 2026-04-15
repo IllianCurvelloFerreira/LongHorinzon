@@ -10,6 +10,8 @@ from torch.utils.data import DataLoader
 
 from datasets.ett_sliding_window import (
     SlidingWindowDataset,
+    SlidingWindowTargetDataset,
+    load_multivariate_series,
     load_univariate_series,
     train_val_test_split_time,
 )
@@ -47,46 +49,91 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str) -> Metrics:
 
 
 def build_loaders(args):
-    series = load_univariate_series(
-        root_path=args.root_path,
-        data_name=args.data,
-        target_col=args.target,
-    )
+    if args.input_mode == "univariate":
+        series = load_univariate_series(
+            root_path=args.root_path,
+            data_name=args.data,
+            target_col=args.target,
+            data_dir=args.data_dir,
+        )
 
-    train_series, val_series, test_series = train_val_test_split_time(
-        series,
-        train_ratio=args.train_ratio,
-        val_ratio=args.val_ratio,
-    )
+        train_series, val_series, test_series = train_val_test_split_time(
+            series,
+            train_ratio=args.train_ratio,
+            val_ratio=args.val_ratio,
+        )
 
-    # =========================================================
-    # NORMALIZAÇÃO CORRETA
-    # Fit apenas no TRAIN
-    # =========================================================
-    scaler = StandardScaler()
+        scaler = StandardScaler()
+        train_series = scaler.fit_transform(train_series)
+        val_series = scaler.transform(val_series)
+        test_series = scaler.transform(test_series)
 
-    train_series = scaler.fit_transform(train_series)
-    val_series = scaler.transform(val_series)
-    test_series = scaler.transform(test_series)
+        train_ds = SlidingWindowDataset(
+            train_series,
+            lookback=args.lookback,
+            horizon=args.horizon,
+            stride=args.stride,
+        )
+        val_ds = SlidingWindowDataset(
+            val_series,
+            lookback=args.lookback,
+            horizon=args.horizon,
+            stride=args.stride,
+        )
+        test_ds = SlidingWindowDataset(
+            test_series,
+            lookback=args.lookback,
+            horizon=args.horizon,
+            stride=args.stride,
+        )
 
-    train_ds = SlidingWindowDataset(
-        train_series,
-        lookback=args.lookback,
-        horizon=args.horizon,
-        stride=args.stride,
-    )
-    val_ds = SlidingWindowDataset(
-        val_series,
-        lookback=args.lookback,
-        horizon=args.horizon,
-        stride=args.stride,
-    )
-    test_ds = SlidingWindowDataset(
-        test_series,
-        lookback=args.lookback,
-        horizon=args.horizon,
-        stride=args.stride,
-    )
+        input_size = 1
+
+    elif args.input_mode == "multivariate":
+        series, target_idx, feature_cols = load_multivariate_series(
+            root_path=args.root_path,
+            data_name=args.data,
+            target_col=args.target,
+            data_dir=args.data_dir,
+        )
+
+        train_series, val_series, test_series = train_val_test_split_time(
+            series,
+            train_ratio=args.train_ratio,
+            val_ratio=args.val_ratio,
+        )
+
+        scaler = StandardScaler()
+        train_series = scaler.fit_transform(train_series)
+        val_series = scaler.transform(val_series)
+        test_series = scaler.transform(test_series)
+
+        train_ds = SlidingWindowTargetDataset(
+            train_series,
+            lookback=args.lookback,
+            horizon=args.horizon,
+            target_idx=target_idx,
+            stride=args.stride,
+        )
+        val_ds = SlidingWindowTargetDataset(
+            val_series,
+            lookback=args.lookback,
+            horizon=args.horizon,
+            target_idx=target_idx,
+            stride=args.stride,
+        )
+        test_ds = SlidingWindowTargetDataset(
+            test_series,
+            lookback=args.lookback,
+            horizon=args.horizon,
+            target_idx=target_idx,
+            stride=args.stride,
+        )
+
+        input_size = len(feature_cols)
+
+    else:
+        raise ValueError("input_mode deve ser 'univariate' ou 'multivariate'.")
 
     train_loader = DataLoader(
         train_ds,
@@ -110,19 +157,20 @@ def build_loaders(args):
         num_workers=args.num_workers,
     )
 
-    return train_loader, val_loader, test_loader, scaler
+    return train_loader, val_loader, test_loader, input_size
 
 
 def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     set_seed_fn(run_seed)
 
-    train_loader, val_loader, test_loader, scaler = build_loaders(args)
+    train_loader, val_loader, test_loader, input_size = build_loaders(args)
 
     model = LSTMForecaster(
-        input_size=1,
+        input_size=input_size,
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         horizon=args.horizon,
+        output_size=1,
         dropout=args.dropout,
     ).to(device)
 
@@ -133,7 +181,8 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     best_state = None
 
     print(
-        f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | device={device} ====="
+        f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | "
+        f"input_mode={args.input_mode} | device={device} ====="
     )
 
     for epoch in range(1, args.train_epochs + 1):
