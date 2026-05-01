@@ -1,5 +1,3 @@
-# code without adding PCA
-
 from __future__ import annotations
 
 import argparse
@@ -29,6 +27,10 @@ def parse_args():
         default="univariate",
         choices=["univariate", "multivariate"],
     )
+
+    # PCA opcional
+    parser.add_argument("--use_pca", action="store_true")
+    parser.add_argument("--pca_components", type=int, default=0)
 
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--horizon", type=int, default=96)
@@ -107,6 +109,8 @@ def run_all_datasets(args, device: str):
             {
                 "data": dataset,
                 "input_mode": args.input_mode,
+                "use_pca": args.use_pca,
+                "pca_components": args.pca_components,
                 "lookback": args.lookback,
                 "horizon": args.horizon,
                 "itr": args.itr,
