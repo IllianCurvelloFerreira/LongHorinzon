@@ -36,6 +36,16 @@ def parse_args():
     parser.add_argument("--use_pls", action="store_true")
     parser.add_argument("--pls_components", type=int, default=0)
 
+    # Feature selection supervisionada opcional
+    parser.add_argument("--use_feat_select", action="store_true")
+    parser.add_argument("--feat_select_k", type=int, default=0)
+    parser.add_argument(
+        "--feat_select_method",
+        type=str,
+        default="mutual_info",
+        choices=["mutual_info", "f_regression"],
+    )
+
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--horizon", type=int, default=96)
     parser.add_argument("--stride", type=int, default=1)
@@ -67,14 +77,31 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.use_pca and args.use_pls:
-        raise ValueError("Escolha apenas um entre --use_pca e --use_pls.")
+    selected_reducer_flags = sum([
+        1 if args.use_pca else 0,
+        1 if args.use_pls else 0,
+        1 if args.use_feat_select else 0,
+    ])
+
+    if selected_reducer_flags > 1:
+        raise ValueError(
+            "Escolha apenas um entre --use_pca, --use_pls e --use_feat_select."
+        )
 
     if args.use_pca and args.pca_components <= 0:
-        raise ValueError("Quando --use_pca for usado, --pca_components deve ser > 0.")
+        raise ValueError(
+            "Quando --use_pca for usado, --pca_components deve ser > 0."
+        )
 
     if args.use_pls and args.pls_components <= 0:
-        raise ValueError("Quando --use_pls for usado, --pls_components deve ser > 0.")
+        raise ValueError(
+            "Quando --use_pls for usado, --pls_components deve ser > 0."
+        )
+
+    if args.use_feat_select and args.feat_select_k <= 0:
+        raise ValueError(
+            "Quando --use_feat_select for usado, --feat_select_k deve ser > 0."
+        )
 
     return args
 
@@ -128,6 +155,9 @@ def run_all_datasets(args, device: str):
                 "pca_components": args.pca_components,
                 "use_pls": args.use_pls,
                 "pls_components": args.pls_components,
+                "use_feat_select": args.use_feat_select,
+                "feat_select_k": args.feat_select_k,
+                "feat_select_method": args.feat_select_method,
                 "lookback": args.lookback,
                 "horizon": args.horizon,
                 "itr": args.itr,
