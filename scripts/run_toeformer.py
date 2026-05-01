@@ -1,5 +1,3 @@
-#code toeformer wo autoencoder
-
 from __future__ import annotations
 
 import argparse
@@ -48,6 +46,14 @@ def parse_args():
         choices=["mutual_info", "f_regression"],
     )
 
+    # Autoencoder opcional
+    parser.add_argument("--use_autoencoder", action="store_true")
+    parser.add_argument("--ae_components", type=int, default=0)
+    parser.add_argument("--ae_hidden_dim", type=int, default=32)
+    parser.add_argument("--ae_epochs", type=int, default=30)
+    parser.add_argument("--ae_learning_rate", type=float, default=1e-3)
+    parser.add_argument("--ae_batch_size", type=int, default=256)
+
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--horizon", type=int, default=96)
     parser.add_argument("--stride", type=int, default=1)
@@ -83,27 +89,25 @@ def parse_args():
         1 if args.use_pca else 0,
         1 if args.use_pls else 0,
         1 if args.use_feat_select else 0,
+        1 if args.use_autoencoder else 0,
     ])
 
     if selected_reducer_flags > 1:
         raise ValueError(
-            "Escolha apenas um entre --use_pca, --use_pls e --use_feat_select."
+            "Escolha apenas um entre --use_pca, --use_pls, --use_feat_select e --use_autoencoder."
         )
 
     if args.use_pca and args.pca_components <= 0:
-        raise ValueError(
-            "Quando --use_pca for usado, --pca_components deve ser > 0."
-        )
+        raise ValueError("Quando --use_pca for usado, --pca_components deve ser > 0.")
 
     if args.use_pls and args.pls_components <= 0:
-        raise ValueError(
-            "Quando --use_pls for usado, --pls_components deve ser > 0."
-        )
+        raise ValueError("Quando --use_pls for usado, --pls_components deve ser > 0.")
 
     if args.use_feat_select and args.feat_select_k <= 0:
-        raise ValueError(
-            "Quando --use_feat_select for usado, --feat_select_k deve ser > 0."
-        )
+        raise ValueError("Quando --use_feat_select for usado, --feat_select_k deve ser > 0.")
+
+    if args.use_autoencoder and args.ae_components <= 0:
+        raise ValueError("Quando --use_autoencoder for usado, --ae_components deve ser > 0.")
 
     return args
 
@@ -160,6 +164,10 @@ def run_all_datasets(args, device: str):
                 "use_feat_select": args.use_feat_select,
                 "feat_select_k": args.feat_select_k,
                 "feat_select_method": args.feat_select_method,
+                "use_autoencoder": args.use_autoencoder,
+                "ae_components": args.ae_components,
+                "ae_hidden_dim": args.ae_hidden_dim,
+                "ae_epochs": args.ae_epochs,
                 "lookback": args.lookback,
                 "horizon": args.horizon,
                 "itr": args.itr,

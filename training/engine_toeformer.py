@@ -9,7 +9,7 @@ from sklearn.cross_decomposition import PLSRegression
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import f_regression, mutual_info_regression
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 
 from datasets.ett_sliding_window import (
     SlidingWindowDataset,
@@ -27,6 +27,26 @@ from models.toeformer.model import TOEformer
 class Metrics:
     mse: float
     mae: float
+
+
+class TabularAutoencoder(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, latent_dim: int):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, input_dim),
+        )
+
+    def forward(self, x: torch.Tensor):
+        z = self.encoder(x)
+        x_hat = self.decoder(z)
+        return x_hat, z
 
 
 @torch.no_grad()
@@ -52,9 +72,6 @@ def apply_multivariate_pca(
     target_idx: int,
     pca_components: int,
 ):
-    """
-    Mantém OT como primeiro canal e aplica PCA apenas nas demais variáveis.
-    """
     if pca_components <= 0:
         raise ValueError("Quando use_pca=True, pca_components deve ser > 0.")
 
@@ -82,10 +99,7 @@ def apply_multivariate_pca(
     val_new = np.concatenate([val_target, val_pca], axis=1).astype(np.float32)
     test_new = np.concatenate([test_target, test_pca], axis=1).astype(np.float32)
 
-    new_target_idx = 0
-    feature_dim = train_new.shape[1]
-
-    return train_new, val_new, test_new, new_target_idx, feature_dim
+    return train_new, val_new, test_new, 0, train_new.shape[1]
 
 
 def apply_multivariate_pls(
@@ -95,10 +109,6 @@ def apply_multivariate_pls(
     target_idx: int,
     pls_components: int,
 ):
-    """
-    Mantém OT como primeiro canal e aplica PLS apenas nas demais variáveis,
-    usando OT do treino como supervisão.
-    """
     if pls_components <= 0:
         raise ValueError("Quando use_pls=True, pls_components deve ser > 0.")
 
@@ -128,10 +138,7 @@ def apply_multivariate_pls(
     val_new = np.concatenate([val_target, val_pls], axis=1).astype(np.float32)
     test_new = np.concatenate([test_target, test_pls], axis=1).astype(np.float32)
 
-    new_target_idx = 0
-    feature_dim = train_new.shape[1]
-
-    return train_new, val_new, test_new, new_target_idx, feature_dim
+    return train_new, val_new, test_new, 0, train_new.shape[1]
 
 
 def apply_multivariate_feature_selection(
@@ -142,10 +149,6 @@ def apply_multivariate_feature_selection(
     feat_select_k: int,
     method: str = "mutual_info",
 ):
-    """
-    Mantém OT como primeiro canal e seleciona as k variáveis mais úteis
-    para prever OT, usando apenas o treino.
-    """
     if feat_select_k <= 0:
         raise ValueError("Quando use_feat_select=True, feat_select_k deve ser > 0.")
 
@@ -183,13 +186,82 @@ def apply_multivariate_feature_selection(
     val_new = np.concatenate([val_target, val_sel], axis=1).astype(np.float32)
     test_new = np.concatenate([test_target, test_sel], axis=1).astype(np.float32)
 
-    new_target_idx = 0
-    feature_dim = train_new.shape[1]
-
-    return train_new, val_new, test_new, new_target_idx, feature_dim
+    return train_new, val_new, test_new, 0, train_new.shape[1]
 
 
-def build_loaders(args):
+def apply_multivariate_autoencoder(
+    train_series: np.ndarray,
+    val_series: np.ndarray,
+    test_series: np.ndarray,
+    target_idx: int,
+    ae_components: int,
+    ae_hidden_dim: int,
+    ae_epochs: int,
+    ae_learning_rate: float,
+    ae_batch_size: int,
+    device: str,
+):
+    if ae_components <= 0:
+        raise ValueError("Quando use_autoencoder=True, ae_components deve ser > 0.")
+
+    train_target = train_series[:, target_idx:target_idx + 1]
+    val_target = val_series[:, target_idx:target_idx + 1]
+    test_target = test_series[:, target_idx:target_idx + 1]
+
+    other_idx = [i for i in range(train_series.shape[1]) if i != target_idx]
+
+    if len(other_idx) == 0:
+        return train_target, val_target, test_target, 0, 1
+
+    train_other = train_series[:, other_idx].astype(np.float32)
+    val_other = val_series[:, other_idx].astype(np.float32)
+    test_other = test_series[:, other_idx].astype(np.float32)
+
+    latent_dim = min(ae_components, train_other.shape[1])
+    hidden_dim = max(ae_hidden_dim, latent_dim)
+
+    ae = TabularAutoencoder(
+        input_dim=train_other.shape[1],
+        hidden_dim=hidden_dim,
+        latent_dim=latent_dim,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(ae.parameters(), lr=ae_learning_rate)
+    criterion = nn.MSELoss()
+
+    train_tensor = torch.tensor(train_other, dtype=torch.float32)
+    train_loader = DataLoader(
+        TensorDataset(train_tensor),
+        batch_size=ae_batch_size,
+        shuffle=True,
+        drop_last=False,
+    )
+
+    ae.train()
+    for _ in range(ae_epochs):
+        for (xb,) in train_loader:
+            xb = xb.to(device)
+            x_hat, _ = ae(xb)
+            loss = criterion(x_hat, xb)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+    ae.eval()
+    with torch.no_grad():
+        train_z = ae.encoder(torch.tensor(train_other, dtype=torch.float32, device=device)).cpu().numpy().astype(np.float32)
+        val_z = ae.encoder(torch.tensor(val_other, dtype=torch.float32, device=device)).cpu().numpy().astype(np.float32)
+        test_z = ae.encoder(torch.tensor(test_other, dtype=torch.float32, device=device)).cpu().numpy().astype(np.float32)
+
+    train_new = np.concatenate([train_target, train_z], axis=1).astype(np.float32)
+    val_new = np.concatenate([val_target, val_z], axis=1).astype(np.float32)
+    test_new = np.concatenate([test_target, test_z], axis=1).astype(np.float32)
+
+    return train_new, val_new, test_new, 0, train_new.shape[1]
+
+
+def build_loaders(args, device: str):
     if args.input_mode == "univariate":
         series = load_univariate_series(
             root_path=args.root_path,
@@ -278,6 +350,20 @@ def build_loaders(args):
                 method=args.feat_select_method,
             )
 
+        if args.use_autoencoder:
+            train_series, val_series, test_series, target_idx, feature_dim = apply_multivariate_autoencoder(
+                train_series=train_series,
+                val_series=val_series,
+                test_series=test_series,
+                target_idx=target_idx,
+                ae_components=args.ae_components,
+                ae_hidden_dim=args.ae_hidden_dim,
+                ae_epochs=args.ae_epochs,
+                ae_learning_rate=args.ae_learning_rate,
+                ae_batch_size=args.ae_batch_size,
+                device=device,
+            )
+
         train_ds = SlidingWindowTargetDataset(
             train_series,
             lookback=args.lookback,
@@ -331,7 +417,7 @@ def build_loaders(args):
 def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     set_seed_fn(run_seed)
 
-    train_loader, val_loader, test_loader, target_idx, feature_dim = build_loaders(args)
+    train_loader, val_loader, test_loader, target_idx, feature_dim = build_loaders(args, device=device)
 
     model = TOEformer(
         c_in=feature_dim,
@@ -357,7 +443,8 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     print(
         f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | "
         f"input_mode={args.input_mode} | use_pca={args.use_pca} | "
-        f"use_pls={args.use_pls} | use_feat_select={args.use_feat_select} | device={device} ====="
+        f"use_pls={args.use_pls} | use_feat_select={args.use_feat_select} | "
+        f"use_autoencoder={args.use_autoencoder} | device={device} ====="
     )
 
     for epoch in range(1, args.train_epochs + 1):
