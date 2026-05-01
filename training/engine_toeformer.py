@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.cross_decomposition import PLSRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
@@ -51,29 +52,17 @@ def apply_multivariate_pca(
     pca_components: int,
 ):
     """
-    Mantém o canal alvo OT explícito como primeiro canal e aplica PCA
-    apenas nas demais variáveis.
-
-    Entrada:
-        train/val/test: [T, C]
-
-    Saída:
-        train/val/test transformados: [T, 1 + n_components]
-        new_target_idx = 0
-        feature_dim = 1 + n_components
+    Mantém OT como primeiro canal e aplica PCA apenas nas demais variáveis.
     """
     if pca_components <= 0:
         raise ValueError("Quando use_pca=True, pca_components deve ser > 0.")
 
-    # alvo explícito
     train_target = train_series[:, target_idx:target_idx + 1]
     val_target = val_series[:, target_idx:target_idx + 1]
     test_target = test_series[:, target_idx:target_idx + 1]
 
-    # demais variáveis
     other_idx = [i for i in range(train_series.shape[1]) if i != target_idx]
 
-    # caso extremo: se só houver uma variável, PCA não faz sentido
     if len(other_idx) == 0:
         return train_target, val_target, test_target, 0, 1
 
@@ -88,10 +77,65 @@ def apply_multivariate_pca(
     val_pca = pca.transform(val_other).astype(np.float32)
     test_pca = pca.transform(test_other).astype(np.float32)
 
-    # concatena OT explícito + PCs
     train_new = np.concatenate([train_target, train_pca], axis=1).astype(np.float32)
     val_new = np.concatenate([val_target, val_pca], axis=1).astype(np.float32)
     test_new = np.concatenate([test_target, test_pca], axis=1).astype(np.float32)
+
+    new_target_idx = 0
+    feature_dim = train_new.shape[1]
+
+    return train_new, val_new, test_new, new_target_idx, feature_dim
+
+
+def apply_multivariate_pls(
+    train_series: np.ndarray,
+    val_series: np.ndarray,
+    test_series: np.ndarray,
+    target_idx: int,
+    pls_components: int,
+):
+    """
+    Mantém OT como primeiro canal e aplica PLS apenas nas demais variáveis,
+    usando OT do treino como supervisão.
+
+    Entrada:
+        train/val/test: [T, C]
+
+    Saída:
+        train/val/test transformados: [T, 1 + n_components]
+        new_target_idx = 0
+        feature_dim = 1 + n_components
+    """
+    if pls_components <= 0:
+        raise ValueError("Quando use_pls=True, pls_components deve ser > 0.")
+
+    train_target = train_series[:, target_idx:target_idx + 1]
+    val_target = val_series[:, target_idx:target_idx + 1]
+    test_target = test_series[:, target_idx:target_idx + 1]
+
+    other_idx = [i for i in range(train_series.shape[1]) if i != target_idx]
+
+    if len(other_idx) == 0:
+        return train_target, val_target, test_target, 0, 1
+
+    train_other = train_series[:, other_idx]
+    val_other = val_series[:, other_idx]
+    test_other = test_series[:, other_idx]
+
+    n_components = min(pls_components, train_other.shape[1])
+
+    pls = PLSRegression(n_components=n_components)
+
+    # fit supervisionado só no treino
+    pls.fit(train_other, train_target)
+
+    train_pls = pls.transform(train_other).astype(np.float32)
+    val_pls = pls.transform(val_other).astype(np.float32)
+    test_pls = pls.transform(test_other).astype(np.float32)
+
+    train_new = np.concatenate([train_target, train_pls], axis=1).astype(np.float32)
+    val_new = np.concatenate([val_target, val_pls], axis=1).astype(np.float32)
+    test_new = np.concatenate([test_target, test_pls], axis=1).astype(np.float32)
 
     new_target_idx = 0
     feature_dim = train_new.shape[1]
@@ -121,7 +165,7 @@ def build_loaders(args):
         val_series = scaler.transform(val_series)
         test_series = scaler.transform(test_series)
 
-        # PCA NÃO é aplicado no univariado
+        # No univariado, nada muda
         train_ds = SlidingWindowDataset(
             train_series,
             lookback=args.lookback,
@@ -161,7 +205,7 @@ def build_loaders(args):
         val_series = scaler.transform(val_series).astype(np.float32)
         test_series = scaler.transform(test_series).astype(np.float32)
 
-        # PCA opcional: só no multivariado
+        # PCA opcional
         if args.use_pca:
             train_series, val_series, test_series, target_idx, feature_dim = apply_multivariate_pca(
                 train_series=train_series,
@@ -169,6 +213,16 @@ def build_loaders(args):
                 test_series=test_series,
                 target_idx=target_idx,
                 pca_components=args.pca_components,
+            )
+
+        # PLS opcional
+        if args.use_pls:
+            train_series, val_series, test_series, target_idx, feature_dim = apply_multivariate_pls(
+                train_series=train_series,
+                val_series=val_series,
+                test_series=test_series,
+                target_idx=target_idx,
+                pls_components=args.pls_components,
             )
 
         train_ds = SlidingWindowTargetDataset(
@@ -249,7 +303,7 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
 
     print(
         f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | "
-        f"input_mode={args.input_mode} | use_pca={args.use_pca} | device={device} ====="
+        f"input_mode={args.input_mode} | use_pca={args.use_pca} | use_pls={args.use_pls} | device={device} ====="
     )
 
     for epoch in range(1, args.train_epochs + 1):

@@ -1,5 +1,3 @@
-#code toeformer wo PLS
-
 from __future__ import annotations
 
 import argparse
@@ -34,6 +32,10 @@ def parse_args():
     parser.add_argument("--use_pca", action="store_true")
     parser.add_argument("--pca_components", type=int, default=0)
 
+    # PLS opcional
+    parser.add_argument("--use_pls", action="store_true")
+    parser.add_argument("--pls_components", type=int, default=0)
+
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--horizon", type=int, default=96)
     parser.add_argument("--stride", type=int, default=1)
@@ -63,7 +65,18 @@ def parse_args():
     parser.add_argument("--run_all", action="store_true")
     parser.add_argument("--results_csv", type=str, default="")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.use_pca and args.use_pls:
+        raise ValueError("Escolha apenas um entre --use_pca e --use_pls.")
+
+    if args.use_pca and args.pca_components <= 0:
+        raise ValueError("Quando --use_pca for usado, --pca_components deve ser > 0.")
+
+    if args.use_pls and args.pls_components <= 0:
+        raise ValueError("Quando --use_pls for usado, --pls_components deve ser > 0.")
+
+    return args
 
 
 def summarize_metrics(metrics_runs):
@@ -113,6 +126,8 @@ def run_all_datasets(args, device: str):
                 "input_mode": args.input_mode,
                 "use_pca": args.use_pca,
                 "pca_components": args.pca_components,
+                "use_pls": args.use_pls,
+                "pls_components": args.pls_components,
                 "lookback": args.lookback,
                 "horizon": args.horizon,
                 "itr": args.itr,
