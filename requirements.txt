@@ -2,6 +2,7 @@
 numpy
 pandas
 scikit-learn
+xgboost
 
 # Deep Learning
 torch
@@ -18,3 +19,4 @@ tqdm
 
 # (Opcional, mas recomendado)
 matplotlib
+
