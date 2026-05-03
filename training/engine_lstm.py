@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 
@@ -48,6 +49,61 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str) -> Metrics:
     )
 
 
+def apply_multivariate_pca(
+    train_series: np.ndarray,
+    val_series: np.ndarray,
+    test_series: np.ndarray,
+    target_idx: int,
+    pca_components: int,
+):
+    """
+    Mantém o alvo OT explícito como primeiro canal e aplica PCA
+    apenas nas demais variáveis.
+
+    Isso evita perder o target dentro dos componentes principais.
+
+    Entrada:
+        train/val/test: [T, C]
+
+    Saída:
+        train/val/test: [T, 1 + n_components]
+        new_target_idx = 0
+        input_size = 1 + n_components
+    """
+    if pca_components <= 0:
+        raise ValueError("Quando use_pca=True, pca_components deve ser > 0.")
+
+    train_target = train_series[:, target_idx:target_idx + 1]
+    val_target = val_series[:, target_idx:target_idx + 1]
+    test_target = test_series[:, target_idx:target_idx + 1]
+
+    other_idx = [i for i in range(train_series.shape[1]) if i != target_idx]
+
+    if len(other_idx) == 0:
+        return train_target, val_target, test_target, 0, 1
+
+    train_other = train_series[:, other_idx]
+    val_other = val_series[:, other_idx]
+    test_other = test_series[:, other_idx]
+
+    n_components = min(pca_components, train_other.shape[1])
+
+    pca = PCA(n_components=n_components)
+
+    train_pca = pca.fit_transform(train_other).astype(np.float32)
+    val_pca = pca.transform(val_other).astype(np.float32)
+    test_pca = pca.transform(test_other).astype(np.float32)
+
+    train_new = np.concatenate([train_target, train_pca], axis=1).astype(np.float32)
+    val_new = np.concatenate([val_target, val_pca], axis=1).astype(np.float32)
+    test_new = np.concatenate([test_target, test_pca], axis=1).astype(np.float32)
+
+    new_target_idx = 0
+    input_size = train_new.shape[1]
+
+    return train_new, val_new, test_new, new_target_idx, input_size
+
+
 def build_loaders(args):
     if args.input_mode == "univariate":
         series = load_univariate_series(
@@ -68,6 +124,7 @@ def build_loaders(args):
         val_series = scaler.transform(val_series)
         test_series = scaler.transform(test_series)
 
+        # No univariado, o PCA não é aplicado.
         train_ds = SlidingWindowDataset(
             train_series,
             lookback=args.lookback,
@@ -104,9 +161,22 @@ def build_loaders(args):
         )
 
         scaler = StandardScaler()
-        train_series = scaler.fit_transform(train_series)
-        val_series = scaler.transform(val_series)
-        test_series = scaler.transform(test_series)
+        train_series = scaler.fit_transform(train_series).astype(np.float32)
+        val_series = scaler.transform(val_series).astype(np.float32)
+        test_series = scaler.transform(test_series).astype(np.float32)
+
+        input_size = len(feature_cols)
+
+        # PCA opcional: só no multivariado.
+        # Se --use_pca não for passado, nada muda no fluxo atual.
+        if args.use_pca:
+            train_series, val_series, test_series, target_idx, input_size = apply_multivariate_pca(
+                train_series=train_series,
+                val_series=val_series,
+                test_series=test_series,
+                target_idx=target_idx,
+                pca_components=args.pca_components,
+            )
 
         train_ds = SlidingWindowTargetDataset(
             train_series,
@@ -129,8 +199,6 @@ def build_loaders(args):
             target_idx=target_idx,
             stride=args.stride,
         )
-
-        input_size = len(feature_cols)
 
     else:
         raise ValueError("input_mode deve ser 'univariate' ou 'multivariate'.")
@@ -182,7 +250,7 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
 
     print(
         f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | "
-        f"input_mode={args.input_mode} | device={device} ====="
+        f"input_mode={args.input_mode} | use_pca={args.use_pca} | device={device} ====="
     )
 
     for epoch in range(1, args.train_epochs + 1):
@@ -215,7 +283,10 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
 
         if val_metrics.mse < best_val:
             best_val = val_metrics.mse
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_state = {
+                k: v.detach().cpu().clone()
+                for k, v in model.state_dict().items()
+            }
 
     if best_state is not None:
         model.load_state_dict(best_state)

@@ -1,5 +1,3 @@
-# Code LSTM WO PCA
-
 from __future__ import annotations
 
 import argparse
@@ -29,6 +27,10 @@ def parse_args():
         choices=["univariate", "multivariate"],
     )
 
+    # PCA opcional
+    parser.add_argument("--use_pca", action="store_true")
+    parser.add_argument("--pca_components", type=int, default=0)
+
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--horizon", type=int, default=96)
     parser.add_argument("--stride", type=int, default=1)
@@ -48,7 +50,12 @@ def parse_args():
     parser.add_argument("--itr", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.use_pca and args.pca_components <= 0:
+        raise ValueError("Quando --use_pca for usado, --pca_components deve ser > 0.")
+
+    return args
 
 
 def main():
@@ -58,10 +65,18 @@ def main():
     metrics_runs = []
     for i in range(args.itr):
         run_seed = args.seed + i
-        metrics_runs.append(run_experiment(args, run_seed, device=device, set_seed_fn=set_seed))
+        metrics_runs.append(
+            run_experiment(
+                args,
+                run_seed,
+                device=device,
+                set_seed_fn=set_seed,
+            )
+        )
 
     mse_mean = float(np.mean([m.mse for m in metrics_runs]))
     mse_std = float(np.std([m.mse for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
+
     mae_mean = float(np.mean([m.mae for m in metrics_runs]))
     mae_std = float(np.std([m.mae for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
 
