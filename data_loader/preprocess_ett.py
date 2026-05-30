@@ -15,11 +15,25 @@ except ImportError:
 ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"}
 
 
-def load_ett_long(data_dir: str | Path, group: str, normalize: bool = False) -> pd.DataFrame:
+def load_ett_long(
+    data_dir: str | Path,
+    group: str,
+    normalize: bool = False,
+) -> pd.DataFrame:
     if group not in ALLOWED_GROUPS:
         raise ValueError(f"group inválido: {group}")
 
-    loaded = LongHorizon2.load(directory=str(data_dir), group=group)
+    try:
+        loaded = LongHorizon2.load(
+            directory=str(data_dir),
+            group=group,
+            normalize=normalize,
+        )
+    except TypeError:
+        loaded = LongHorizon2.load(
+            directory=str(data_dir),
+            group=group,
+        )
 
     df = loaded[0] if isinstance(loaded, tuple) else loaded
     df = df.copy()
@@ -29,16 +43,38 @@ def load_ett_long(data_dir: str | Path, group: str, normalize: bool = False) -> 
 
 
 def pivot_long_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
+    """
+    Converte o formato longo:
+        ds, unique_id, y
+
+    para formato wide:
+        date, var1, var2, ..., OT
+
+    Também corrige valores sentinela como -9999, comuns no Weather.
+    """
     wide = (
         df_long.pivot(index="ds", columns="unique_id", values="y")
         .sort_index()
-        .dropna()
     )
+
+    # Corrige valores sentinela de dados ausentes/erro de medição.
+    # No Weather, por exemplo, OT pode vir com -9999.
+    wide = wide.replace(-9999, np.nan)
+
+    # Interpola respeitando a ordem temporal.
+    # limit_direction="both" também preenche NaNs no começo/fim, se existirem.
+    wide = wide.interpolate(method="linear", limit_direction="both")
+
+    # Remove qualquer linha que ainda tenha NaN após interpolação.
+    wide = wide.dropna()
 
     return wide
 
 
-def extract_univariate(df_long: pd.DataFrame, target_col: str = "OT") -> pd.DataFrame:
+def extract_univariate(
+    df_long: pd.DataFrame,
+    target_col: str = "OT",
+) -> pd.DataFrame:
     wide = pivot_long_to_wide(df_long)
 
     if target_col in wide.columns:
@@ -54,7 +90,10 @@ def extract_univariate(df_long: pd.DataFrame, target_col: str = "OT") -> pd.Data
     )
 
 
-def extract_multivariate(df_long: pd.DataFrame, target_col: str = "OT") -> pd.DataFrame:
+def extract_multivariate(
+    df_long: pd.DataFrame,
+    target_col: str = "OT",
+) -> pd.DataFrame:
     wide = pivot_long_to_wide(df_long)
 
     if target_col not in wide.columns:
@@ -66,7 +105,7 @@ def extract_multivariate(df_long: pd.DataFrame, target_col: str = "OT") -> pd.Da
 
     df = wide.reset_index().rename(columns={"ds": "date"})
 
-    # Garante que OT fique como última coluna
+    # Garante que OT fique como última coluna.
     cols = [c for c in df.columns if c not in ["date", "OT"]]
     df = df[["date"] + cols + ["OT"]]
 
@@ -81,13 +120,23 @@ def preprocess_ett_dataset(
     multivariate: bool = False,
     normalize: bool = False,
 ) -> Path:
-    df_long = load_ett_long(data_dir, group, normalize)
+    df_long = load_ett_long(
+        data_dir=data_dir,
+        group=group,
+        normalize=normalize,
+    )
 
     if multivariate:
-        df_out = extract_multivariate(df_long, target_col=target_col)
+        df_out = extract_multivariate(
+            df_long,
+            target_col=target_col,
+        )
         suffix = "_multivariate"
     else:
-        df_out = extract_univariate(df_long, target_col=target_col)
+        df_out = extract_univariate(
+            df_long,
+            target_col=target_col,
+        )
         suffix = ""
 
     out_dir = Path(out_dir)
@@ -122,7 +171,10 @@ def load_univariate_numpy(
     group: str,
     data_dir: str | Path = "./nixtla_cache",
 ) -> np.ndarray:
-    df_long = load_ett_long(data_dir, group)
+    df_long = load_ett_long(
+        data_dir=data_dir,
+        group=group,
+    )
     df_uni = extract_univariate(df_long)
 
     return df_uni["OT"].to_numpy(dtype=np.float32)
