@@ -43,7 +43,32 @@ def _load_ett_long(
     df = loaded[0] if isinstance(loaded, tuple) else loaded
     df = df.copy()
     df["ds"] = pd.to_datetime(df["ds"])
+
     return df
+
+
+def _pivot_long_to_wide_clean(df_long: pd.DataFrame) -> pd.DataFrame:
+    """
+    Converte long -> wide e corrige valores sentinela como -9999.
+
+    Isso é importante principalmente para Weather, onde a coluna OT pode
+    conter -9999 representando dado ausente/erro de medição.
+    """
+    wide = (
+        df_long.pivot(index="ds", columns="unique_id", values="y")
+        .sort_index()
+    )
+
+    # Corrige valores sentinela.
+    wide = wide.replace(-9999, np.nan)
+
+    # Interpola respeitando a ordem temporal.
+    wide = wide.interpolate(method="linear", limit_direction="both")
+
+    # Remove qualquer linha ainda incompleta.
+    wide = wide.dropna()
+
+    return wide
 
 
 # =========================================================
@@ -123,6 +148,8 @@ def ensure_ett_multivariate_csv(
     """
     Garante que o CSV multivariado exista.
     Salva todas as variáveis: date + features.
+
+    Também corrige valores sentinela como -9999 antes de salvar.
     """
     root_path = Path(root_path)
     csv_path = root_path / f"{data_name}_multivariate.csv"
@@ -136,17 +163,14 @@ def ensure_ett_multivariate_csv(
             group=data_name,
         )
 
-        wide = (
-            df_long.pivot(index="ds", columns="unique_id", values="y")
-            .sort_index()
-            .dropna()
-        )
+        wide = _pivot_long_to_wide_clean(df_long)
 
         if target_col not in wide.columns:
             fallback_col = wide.columns[-1]
             print(f"[WARN] {target_col} não encontrado → usando {fallback_col} como OT")
             wide = wide.rename(columns={fallback_col: "OT"})
             target_col = "OT"
+
         elif target_col != "OT":
             wide = wide.rename(columns={target_col: "OT"})
             target_col = "OT"
