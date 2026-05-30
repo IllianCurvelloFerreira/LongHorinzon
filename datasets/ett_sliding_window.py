@@ -15,7 +15,7 @@ except ImportError:
 from data_loader.preprocess_ett import preprocess_ett_dataset
 
 
-ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2"}
+ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"}
 
 
 # =========================================================
@@ -47,7 +47,7 @@ def _load_ett_long(
 
 
 # =========================================================
-# UNIVARIATE CSV (CURRENT BEHAVIOR)
+# UNIVARIATE CSV
 # =========================================================
 def ensure_ett_csv(
     root_path: str | Path,
@@ -69,6 +69,8 @@ def ensure_ett_csv(
             group=data_name,
             data_dir=data_dir,
             out_dir=root_path,
+            target_col=target_col,
+            multivariate=False,
         )
 
     if not csv_path.exists():
@@ -86,7 +88,7 @@ def load_univariate_series(
     data_dir: str | Path = "./nixtla_cache",
 ) -> np.ndarray:
     """
-    Carrega série univariada [T, 1]
+    Carrega série univariada [T, 1].
     """
     path = ensure_ett_csv(
         root_path=root_path,
@@ -110,11 +112,12 @@ def load_univariate_series(
 
 
 # =========================================================
-# MULTIVARIATE CSV (NEW BEHAVIOR)
+# MULTIVARIATE CSV
 # =========================================================
 def ensure_ett_multivariate_csv(
     root_path: str | Path,
     data_name: str,
+    target_col: str = "OT",
     data_dir: str | Path = "./nixtla_cache",
 ) -> Path:
     """
@@ -137,9 +140,23 @@ def ensure_ett_multivariate_csv(
             df_long.pivot(index="ds", columns="unique_id", values="y")
             .sort_index()
             .dropna()
-            .reset_index()
-            .rename(columns={"ds": "date"})
         )
+
+        if target_col not in wide.columns:
+            fallback_col = wide.columns[-1]
+            print(f"[WARN] {target_col} não encontrado → usando {fallback_col} como OT")
+            wide = wide.rename(columns={fallback_col: "OT"})
+            target_col = "OT"
+        elif target_col != "OT":
+            wide = wide.rename(columns={target_col: "OT"})
+            target_col = "OT"
+
+        wide = wide.reset_index().rename(columns={"ds": "date"})
+
+        # Garante que OT fique como última coluna.
+        if "OT" in wide.columns:
+            cols = [c for c in wide.columns if c not in ["date", "OT"]]
+            wide = wide[["date"] + cols + ["OT"]]
 
         wide.to_csv(csv_path, index=False)
         print(f"[OK] {data_name} salvo em {csv_path}")
@@ -167,6 +184,7 @@ def load_multivariate_series(
     path = ensure_ett_multivariate_csv(
         root_path=root_path,
         data_name=data_name,
+        target_col=target_col,
         data_dir=data_dir,
     )
 
@@ -176,6 +194,7 @@ def load_multivariate_series(
         raise ValueError(f"{path.name} precisa ter a coluna 'date'.")
 
     feature_cols = [c for c in df.columns if c != "date"]
+
     if target_col not in feature_cols:
         raise ValueError(f"{path.name} precisa ter a coluna alvo '{target_col}'.")
 
@@ -194,7 +213,7 @@ def train_val_test_split_time(
     val_ratio: float = 0.2,
 ):
     """
-    Split temporal da série
+    Split temporal da série.
     """
     assert series.ndim == 2, "series must be [T, C]"
 
@@ -210,7 +229,7 @@ def train_val_test_split_time(
 
 
 # =========================================================
-# CURRENT DATASET (UNCHANGED)
+# DATASET UNIVARIADO OU MULTIVARIADO COM SAÍDA MULTIVARIADA
 # x: [lookback, C]
 # y: [horizon, C]
 # =========================================================
@@ -252,7 +271,7 @@ class SlidingWindowDataset(Dataset):
 
 
 # =========================================================
-# NEW DATASET FOR MULTIVARIATE INPUT / UNIVARIATE TARGET
+# DATASET MULTIVARIADO COM SAÍDA UNIVARIADA
 # x: [lookback, C]
 # y: [horizon, 1]
 # =========================================================
@@ -289,8 +308,8 @@ class SlidingWindowTargetDataset(Dataset):
     def __getitem__(self, idx: int):
         i = self.idxs[idx]
 
-        x = self.series[i:i + self.lookback]  # [L, C]
-        y_full = self.series[i + self.lookback:i + self.lookback + self.horizon]  # [H, C]
-        y = y_full[:, self.target_idx:self.target_idx + 1]  # [H, 1]
+        x = self.series[i:i + self.lookback]
+        y_full = self.series[i + self.lookback:i + self.lookback + self.horizon]
+        y = y_full[:, self.target_idx:self.target_idx + 1]
 
         return torch.from_numpy(x), torch.from_numpy(y)

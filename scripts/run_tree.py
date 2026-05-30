@@ -1,3 +1,4 @@
+# Adding changes
 from __future__ import annotations
 
 import argparse
@@ -7,7 +8,7 @@ import numpy as np
 from training.engine_tree import run_experiment
 
 
-ALL_DATASETS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2"]
+ALL_DATASETS = ALL_DATASETS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"]
 
 
 def parse_args():

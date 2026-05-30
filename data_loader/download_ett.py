@@ -9,7 +9,7 @@ except ImportError:
     from datasetsforecast.long_horizon import LongHorizon as LongHorizon2
 
 
-ALLOWED_GROUPS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2"]
+ALLOWED_GROUPS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"]
 
 
 def download_ett_dataset(
@@ -17,7 +17,7 @@ def download_ett_dataset(
     data_dir: str | Path = "./nixtla_cache",
 ) -> None:
     """
-    Faz download (ou garante cache) de um dataset ETT.
+    Faz download ou garante cache de um dataset Long Horizon.
     """
     if group not in ALLOWED_GROUPS:
         raise ValueError(f"group inválido: {group}")
@@ -27,7 +27,6 @@ def download_ett_dataset(
 
     print(f"[INFO] Baixando {group}...")
 
-    # Apenas chamar já baixa/cacheia
     LongHorizon2.load(directory=str(data_dir), group=group)
 
     print(f"[OK] {group} disponível em {data_dir}")
@@ -38,7 +37,7 @@ def download_all_ett(
     groups: List[str] = ALLOWED_GROUPS,
 ) -> None:
     """
-    Baixa todos os datasets ETT.
+    Baixa todos os datasets configurados.
     """
     for g in groups:
         download_ett_dataset(g, data_dir)

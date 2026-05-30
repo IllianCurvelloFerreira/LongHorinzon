@@ -29,10 +29,14 @@ def ensure_ett_csv(
             group=data_name,
             data_dir=data_dir,
             out_dir=root_path,
+            target_col=target_col,
+            multivariate=False,
         )
 
     if not csv_path.exists():
-        raise FileNotFoundError(f"Arquivo não encontrado mesmo após preprocessamento: {csv_path}")
+        raise FileNotFoundError(
+            f"Arquivo não encontrado mesmo após preprocessamento: {csv_path}"
+        )
 
     return csv_path
 
@@ -44,7 +48,7 @@ def load_univariate_series(
     data_dir: str | Path = "./nixtla_cache",
 ) -> np.ndarray:
     """
-    Carrega a série OT como vetor 1D [T,].
+    Carrega a série alvo como vetor 1D [T,].
     """
     path = ensure_ett_csv(
         root_path=root_path,
@@ -57,6 +61,7 @@ def load_univariate_series(
 
     if "date" not in df.columns:
         raise ValueError(f"{data_name}.csv precisa ter a coluna 'date'.")
+
     if target_col not in df.columns:
         raise ValueError(f"{data_name}.csv precisa ter a coluna alvo '{target_col}'.")
 
@@ -86,11 +91,23 @@ def train_val_test_split_time_1d(
 
 def seasonal_period_for_group(group: str) -> int:
     """
+    Período sazonal sugerido para SARIMA.
+
     ETTh*: hourly -> m=24
     ETTm*: 15-min -> m=96
+    Weather: 10-min -> m=144, considerando ciclo diário
+    Exchange: daily -> m=7, considerando ciclo semanal
     """
     if group.startswith("ETTh"):
         return 24
+
     if group.startswith("ETTm"):
         return 96
+
+    if group == "Weather":
+        return 144
+
+    if group == "Exchange":
+        return 7
+
     return 1

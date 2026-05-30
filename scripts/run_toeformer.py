@@ -10,7 +10,7 @@ from utils.device import get_device
 from utils.seed import set_seed
 
 
-ALL_DATASETS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2"]
+ALL_DATASETS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"]
 
 
 def parse_args():
