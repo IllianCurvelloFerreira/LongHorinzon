@@ -55,7 +55,9 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str):
     mse_sum, mae_sum, n = 0.0, 0.0, 0
 
     for x, y in loader:
-        x, y = x.to(device), y.to(device)
+        x = x.to(device)
+        y = y.to(device)
+
         y_hat, _, _ = model(x)
 
         mse_sum += torch.nn.functional.mse_loss(y_hat, y, reduction="sum").item()
@@ -250,9 +252,17 @@ def apply_multivariate_autoencoder(
 
     ae.eval()
     with torch.no_grad():
-        train_z = ae.encoder(torch.tensor(train_other, dtype=torch.float32, device=device)).cpu().numpy().astype(np.float32)
-        val_z = ae.encoder(torch.tensor(val_other, dtype=torch.float32, device=device)).cpu().numpy().astype(np.float32)
-        test_z = ae.encoder(torch.tensor(test_other, dtype=torch.float32, device=device)).cpu().numpy().astype(np.float32)
+        train_z = ae.encoder(
+            torch.tensor(train_other, dtype=torch.float32, device=device)
+        ).cpu().numpy().astype(np.float32)
+
+        val_z = ae.encoder(
+            torch.tensor(val_other, dtype=torch.float32, device=device)
+        ).cpu().numpy().astype(np.float32)
+
+        test_z = ae.encoder(
+            torch.tensor(test_other, dtype=torch.float32, device=device)
+        ).cpu().numpy().astype(np.float32)
 
     train_new = np.concatenate([train_target, train_z], axis=1).astype(np.float32)
     val_new = np.concatenate([val_target, val_z], axis=1).astype(np.float32)
@@ -269,6 +279,7 @@ def build_loaders(args, device: str):
             target_col=args.target,
             data_dir=args.data_dir,
         )
+
         target_idx = 0
         feature_dim = 1
 
@@ -279,9 +290,9 @@ def build_loaders(args, device: str):
         )
 
         scaler = StandardScaler()
-        train_series = scaler.fit_transform(train_series)
-        val_series = scaler.transform(val_series)
-        test_series = scaler.transform(test_series)
+        train_series = scaler.fit_transform(train_series).astype(np.float32)
+        val_series = scaler.transform(val_series).astype(np.float32)
+        test_series = scaler.transform(test_series).astype(np.float32)
 
         train_ds = SlidingWindowDataset(
             train_series,
@@ -309,6 +320,7 @@ def build_loaders(args, device: str):
             target_col=args.target,
             data_dir=args.data_dir,
         )
+
         feature_dim = len(feature_cols)
 
         train_series, val_series, test_series = train_val_test_split_time(
@@ -364,27 +376,47 @@ def build_loaders(args, device: str):
                 device=device,
             )
 
-        train_ds = SlidingWindowTargetDataset(
-            train_series,
-            lookback=args.lookback,
-            horizon=args.horizon,
-            target_idx=target_idx,
-            stride=args.stride,
-        )
-        val_ds = SlidingWindowTargetDataset(
-            val_series,
-            lookback=args.lookback,
-            horizon=args.horizon,
-            target_idx=target_idx,
-            stride=args.stride,
-        )
-        test_ds = SlidingWindowTargetDataset(
-            test_series,
-            lookback=args.lookback,
-            horizon=args.horizon,
-            target_idx=target_idx,
-            stride=args.stride,
-        )
+        if args.output_mode == "multivariate":
+            train_ds = SlidingWindowDataset(
+                train_series,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                stride=args.stride,
+            )
+            val_ds = SlidingWindowDataset(
+                val_series,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                stride=args.stride,
+            )
+            test_ds = SlidingWindowDataset(
+                test_series,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                stride=args.stride,
+            )
+        else:
+            train_ds = SlidingWindowTargetDataset(
+                train_series,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                target_idx=target_idx,
+                stride=args.stride,
+            )
+            val_ds = SlidingWindowTargetDataset(
+                val_series,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                target_idx=target_idx,
+                stride=args.stride,
+            )
+            test_ds = SlidingWindowTargetDataset(
+                test_series,
+                lookback=args.lookback,
+                horizon=args.horizon,
+                target_idx=target_idx,
+                stride=args.stride,
+            )
 
     else:
         raise ValueError("input_mode deve ser 'univariate' ou 'multivariate'.")
@@ -414,15 +446,58 @@ def build_loaders(args, device: str):
     return train_loader, val_loader, test_loader, target_idx, feature_dim
 
 
+def build_decomposition_target(
+    model: nn.Module,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    args,
+    target_idx: int,
+):
+    """
+    Monta a sequência usada para calcular a decomposição verdadeira
+    de season/trend.
+
+    - univariate: usa x e y diretamente.
+    - multivariate + output_mode=target: usa apenas o canal alvo.
+    - multivariate + output_mode=multivariate: usa todos os canais.
+    """
+    if args.input_mode == "univariate":
+        xy_target = torch.cat([x, y], dim=1)
+
+    elif args.output_mode == "multivariate":
+        xy_target = torch.cat([x, y], dim=1)
+
+    else:
+        x_target = x[:, :, target_idx:target_idx + 1]
+        xy_target = torch.cat([x_target, y], dim=1)
+
+    season_xy, trend_xy = model.decomp(xy_target)
+
+    y_season_true = season_xy[:, -args.horizon:, :]
+    y_trend_true = trend_xy[:, -args.horizon:, :]
+
+    return y_season_true, y_trend_true
+
+
 def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     set_seed_fn(run_seed)
 
-    train_loader, val_loader, test_loader, target_idx, feature_dim = build_loaders(args, device=device)
+    train_loader, val_loader, test_loader, target_idx, feature_dim = build_loaders(
+        args,
+        device=device,
+    )
+
+    if args.output_mode == "multivariate":
+        c_out = feature_dim
+        model_target_idx = None
+    else:
+        c_out = 1
+        model_target_idx = target_idx
 
     model = TOEformer(
         c_in=feature_dim,
-        c_out=1,
-        target_idx=target_idx,
+        c_out=c_out,
+        target_idx=model_target_idx,
         lookback=args.lookback,
         horizon=args.horizon,
         d_model=args.d_model,
@@ -442,8 +517,9 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
 
     print(
         f"\n===== Run seed={run_seed} | data={args.data} | horizon={args.horizon} | "
-        f"input_mode={args.input_mode} | use_pca={args.use_pca} | "
-        f"use_pls={args.use_pls} | use_feat_select={args.use_feat_select} | "
+        f"input_mode={args.input_mode} | output_mode={args.output_mode} | "
+        f"use_pca={args.use_pca} | use_pls={args.use_pls} | "
+        f"use_feat_select={args.use_feat_select} | "
         f"use_autoencoder={args.use_autoencoder} | device={device} ====="
     )
 
@@ -451,20 +527,18 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
         model.train()
 
         for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
+            x = x.to(device)
+            y = y.to(device)
 
             y_hat, y_season_pred, y_trend_pred = model(x)
 
-            if args.input_mode == "univariate":
-                xy_target = torch.cat([x, y], dim=1)
-            else:
-                x_target = x[:, :, target_idx:target_idx + 1]
-                xy_target = torch.cat([x_target, y], dim=1)
-
-            season_xy, trend_xy = model.decomp(xy_target)
-
-            y_season_true = season_xy[:, -args.horizon:, :]
-            y_trend_true = trend_xy[:, -args.horizon:, :]
+            y_season_true, y_trend_true = build_decomposition_target(
+                model=model,
+                x=x,
+                y=y,
+                args=args,
+                target_idx=target_idx,
+            )
 
             loss, mse, lrve = toeformer_total_loss(
                 y_true=y,
@@ -487,7 +561,10 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
 
         if val_mse < best_val:
             best_val = val_mse
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_state = {
+                k: v.detach().cpu().clone()
+                for k, v in model.state_dict().items()
+            }
 
         print(
             f"Epoch {epoch:02d} | "

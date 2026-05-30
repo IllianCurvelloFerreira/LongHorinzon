@@ -28,6 +28,15 @@ def parse_args():
         choices=["univariate", "multivariate"],
     )
 
+    # Novo: controla se a saída no modo multivariado será apenas o target ou todas as variáveis.
+    # default="target" mantém exatamente o comportamento antigo.
+    parser.add_argument(
+        "--output_mode",
+        type=str,
+        default="target",
+        choices=["target", "multivariate"],
+    )
+
     # PCA opcional
     parser.add_argument("--use_pca", action="store_true")
     parser.add_argument("--pca_components", type=int, default=0)
@@ -94,7 +103,8 @@ def parse_args():
 
     if selected_reducer_flags > 1:
         raise ValueError(
-            "Escolha apenas um entre --use_pca, --use_pls, --use_feat_select e --use_autoencoder."
+            "Escolha apenas um entre --use_pca, --use_pls, "
+            "--use_feat_select e --use_autoencoder."
         )
 
     if args.use_pca and args.pca_components <= 0:
@@ -109,12 +119,27 @@ def parse_args():
     if args.use_autoencoder and args.ae_components <= 0:
         raise ValueError("Quando --use_autoencoder for usado, --ae_components deve ser > 0.")
 
+    # Para comparar com o artigo, output multivariado deve ser nas variáveis originais.
+    # Por isso, bloqueamos reduções nesse modo.
+    if args.output_mode == "multivariate" and selected_reducer_flags > 0:
+        raise ValueError(
+            "Para --output_mode multivariate, não use --use_pca, --use_pls, "
+            "--use_feat_select ou --use_autoencoder. "
+            "A saída multivariada deve ser avaliada nas variáveis originais."
+        )
+
+    if args.output_mode == "multivariate" and args.input_mode != "multivariate":
+        raise ValueError(
+            "--output_mode multivariate só faz sentido com --input_mode multivariate."
+        )
+
     return args
 
 
 def summarize_metrics(metrics_runs):
     mse_mean = float(np.mean([m.mse for m in metrics_runs]))
     mse_std = float(np.std([m.mse for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
+
     mae_mean = float(np.mean([m.mae for m in metrics_runs]))
     mae_std = float(np.std([m.mae for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
 
@@ -131,7 +156,14 @@ def run_single_dataset(args, device: str):
 
     for i in range(args.itr):
         run_seed = args.seed + i
-        metrics_runs.append(run_experiment(args, run_seed, device=device, set_seed_fn=set_seed))
+        metrics_runs.append(
+            run_experiment(
+                args,
+                run_seed,
+                device=device,
+                set_seed_fn=set_seed,
+            )
+        )
 
     summary = summarize_metrics(metrics_runs)
 
@@ -157,6 +189,7 @@ def run_all_datasets(args, device: str):
             {
                 "data": dataset,
                 "input_mode": args.input_mode,
+                "output_mode": args.output_mode,
                 "use_pca": args.use_pca,
                 "pca_components": args.pca_components,
                 "use_pls": args.use_pls,
