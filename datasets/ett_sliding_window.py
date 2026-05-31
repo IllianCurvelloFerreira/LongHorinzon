@@ -10,7 +10,12 @@ from torch.utils.data import Dataset
 try:
     from datasetsforecast.long_horizon2 import LongHorizon2
 except ImportError:
-    from datasetsforecast.long_horizon import LongHorizon as LongHorizon2
+    LongHorizon2 = None
+
+try:
+    from datasetsforecast.long_horizon import LongHorizon
+except ImportError:
+    LongHorizon = None
 
 from data_loader.preprocess_ett import preprocess_ett_dataset
 
@@ -28,16 +33,41 @@ def _load_ett_long(
     if group not in ALLOWED_GROUPS:
         raise ValueError(f"group deve ser um destes: {sorted(ALLOWED_GROUPS)}")
 
-    try:
-        loaded = LongHorizon2.load(
-            directory=str(data_dir),
-            group=group,
-            normalize=False,
-        )
-    except TypeError:
-        loaded = LongHorizon2.load(
-            directory=str(data_dir),
-            group=group,
+    loaded = None
+    last_error = None
+
+    # Primeiro tenta LongHorizon2, que já funcionou para ETT e Weather.
+    if LongHorizon2 is not None:
+        try:
+            try:
+                loaded = LongHorizon2.load(
+                    directory=str(data_dir),
+                    group=group,
+                    normalize=False,
+                )
+            except TypeError:
+                loaded = LongHorizon2.load(
+                    directory=str(data_dir),
+                    group=group,
+                )
+        except Exception as e:
+            last_error = e
+
+    # Fallback para LongHorizon antigo.
+    # Isso é útil principalmente para Exchange, que pode não existir no LongHorizon2.
+    if loaded is None and LongHorizon is not None:
+        try:
+            loaded = LongHorizon.load(
+                directory=str(data_dir),
+                group=group,
+            )
+        except Exception as e:
+            last_error = e
+
+    if loaded is None:
+        raise RuntimeError(
+            f"Não foi possível carregar o grupo '{group}'. "
+            f"Último erro: {last_error}"
         )
 
     df = loaded[0] if isinstance(loaded, tuple) else loaded
