@@ -9,10 +9,45 @@ import pandas as pd
 try:
     from datasetsforecast.long_horizon2 import LongHorizon2
 except ImportError:
-    from datasetsforecast.long_horizon import LongHorizon as LongHorizon2
+    LongHorizon2 = None
+
+try:
+    from datasetsforecast.long_horizon import LongHorizon
+except ImportError:
+    LongHorizon = None
 
 
 ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"}
+
+
+def _load_dataset_with_optional_normalize(
+    loader,
+    data_dir: str | Path,
+    group: str,
+    normalize: bool = False,
+) -> pd.DataFrame:
+    """
+    Alguns loaders aceitam normalize=..., outros não.
+    Esta função tenta primeiro com normalize e, se der TypeError,
+    tenta novamente sem esse argumento.
+    """
+    try:
+        loaded = loader.load(
+            directory=str(data_dir),
+            group=group,
+            normalize=normalize,
+        )
+    except TypeError:
+        loaded = loader.load(
+            directory=str(data_dir),
+            group=group,
+        )
+
+    df = loaded[0] if isinstance(loaded, tuple) else loaded
+    df = df.copy()
+    df["ds"] = pd.to_datetime(df["ds"])
+
+    return df
 
 
 def load_ett_long(
@@ -23,23 +58,51 @@ def load_ett_long(
     if group not in ALLOWED_GROUPS:
         raise ValueError(f"group inválido: {group}")
 
-    try:
-        loaded = LongHorizon2.load(
-            directory=str(data_dir),
+    # Caso especial:
+    # Exchange não está disponível no LongHorizon2.
+    # Para não alterar o comportamento dos datasets que já funcionaram,
+    # apenas Exchange usa LongHorizon.
+    if group == "Exchange":
+        if LongHorizon is None:
+            raise ImportError(
+                "LongHorizon não está disponível. "
+                "Verifique a instalação do pacote datasetsforecast."
+            )
+
+        print("[INFO] Carregando Exchange via LongHorizon")
+        return _load_dataset_with_optional_normalize(
+            loader=LongHorizon,
+            data_dir=data_dir,
             group=group,
             normalize=normalize,
         )
-    except TypeError:
-        loaded = LongHorizon2.load(
-            directory=str(data_dir),
+
+    # Para ETTh1, ETTh2, ETTm1, ETTm2 e Weather:
+    # mantém o comportamento anterior usando LongHorizon2.
+    if LongHorizon2 is not None:
+        print(f"[INFO] Carregando {group} via LongHorizon2")
+        return _load_dataset_with_optional_normalize(
+            loader=LongHorizon2,
+            data_dir=data_dir,
             group=group,
+            normalize=normalize,
         )
 
-    df = loaded[0] if isinstance(loaded, tuple) else loaded
-    df = df.copy()
-    df["ds"] = pd.to_datetime(df["ds"])
+    # Fallback apenas se LongHorizon2 não existir no ambiente.
+    # Isso preserva a lógica antiga, que usava LongHorizon como alternativa.
+    if LongHorizon is not None:
+        print(f"[WARN] LongHorizon2 indisponível. Carregando {group} via LongHorizon")
+        return _load_dataset_with_optional_normalize(
+            loader=LongHorizon,
+            data_dir=data_dir,
+            group=group,
+            normalize=normalize,
+        )
 
-    return df
+    raise ImportError(
+        "Nenhum loader disponível. "
+        "Verifique a instalação de datasetsforecast."
+    )
 
 
 def pivot_long_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
