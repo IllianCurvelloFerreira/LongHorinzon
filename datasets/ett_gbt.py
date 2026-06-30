@@ -8,40 +8,10 @@ import torch
 from sklearn.preprocessing import MaxAbsScaler, StandardScaler
 from torch.utils.data import Dataset
 
-try:
-    from datasetsforecast.long_horizon2 import LongHorizon2
-except ImportError:
-    from datasetsforecast.long_horizon import LongHorizon as LongHorizon2
-
 from data_loader.preprocess_ett import preprocess_ett_dataset
 
 
-ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2"}
-
-
-def _load_ett_long(
-    data_dir: str | Path,
-    group: str,
-) -> pd.DataFrame:
-    if group not in ALLOWED_GROUPS:
-        raise ValueError(f"group deve ser um destes: {sorted(ALLOWED_GROUPS)}")
-
-    try:
-        loaded = LongHorizon2.load(
-            directory=str(data_dir),
-            group=group,
-            normalize=False,
-        )
-    except TypeError:
-        loaded = LongHorizon2.load(
-            directory=str(data_dir),
-            group=group,
-        )
-
-    df = loaded[0] if isinstance(loaded, tuple) else loaded
-    df = df.copy()
-    df["ds"] = pd.to_datetime(df["ds"])
-    return df
+ALLOWED_GROUPS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"}
 
 
 def ensure_ett_csv(
@@ -52,7 +22,14 @@ def ensure_ett_csv(
 ) -> Path:
     """
     Garante que o CSV univariado exista.
+    Exemplo:
+        data/ETT/ETTh1.csv
+        data/ETT/Weather.csv
+        data/ETT/Exchange.csv
     """
+    if data_name not in ALLOWED_GROUPS:
+        raise ValueError(f"data_name deve ser um destes: {sorted(ALLOWED_GROUPS)}")
+
     root_path = Path(root_path)
     csv_path = root_path / f"{data_name}.csv"
 
@@ -64,6 +41,9 @@ def ensure_ett_csv(
             group=data_name,
             data_dir=data_dir,
             out_dir=root_path,
+            target_col=target_col,
+            multivariate=False,
+            normalize=False,
         )
 
     if not csv_path.exists():
@@ -77,12 +57,19 @@ def ensure_ett_csv(
 def ensure_ett_multivariate_csv(
     root_path: str | Path,
     data_name: str,
+    target_col: str = "OT",
     data_dir: str | Path = "./nixtla_cache",
 ) -> Path:
     """
     Garante que o CSV multivariado exista.
-    Salva: date + todas as variáveis.
+    Exemplo:
+        data/ETT/ETTh1_multivariate.csv
+        data/ETT/Weather_multivariate.csv
+        data/ETT/Exchange_multivariate.csv
     """
+    if data_name not in ALLOWED_GROUPS:
+        raise ValueError(f"data_name deve ser um destes: {sorted(ALLOWED_GROUPS)}")
+
     root_path = Path(root_path)
     csv_path = root_path / f"{data_name}_multivariate.csv"
 
@@ -90,21 +77,14 @@ def ensure_ett_multivariate_csv(
         print(f"[INFO] {csv_path} não encontrado. Gerando automaticamente...")
         root_path.mkdir(parents=True, exist_ok=True)
 
-        df_long = _load_ett_long(
-            data_dir=data_dir,
+        preprocess_ett_dataset(
             group=data_name,
+            data_dir=data_dir,
+            out_dir=root_path,
+            target_col=target_col,
+            multivariate=True,
+            normalize=False,
         )
-
-        wide = (
-            df_long.pivot(index="ds", columns="unique_id", values="y")
-            .sort_index()
-            .dropna()
-            .reset_index()
-            .rename(columns={"ds": "date"})
-        )
-
-        wide.to_csv(csv_path, index=False)
-        print(f"[OK] {data_name} salvo em {csv_path}")
 
     if not csv_path.exists():
         raise FileNotFoundError(
@@ -118,18 +98,21 @@ def get_file_path(
     root_path: str | Path,
     data_name: str,
     input_mode: str = "univariate",
+    target_col: str = "OT",
     data_dir: str | Path = "./nixtla_cache",
 ) -> str:
     if input_mode == "univariate":
         path = ensure_ett_csv(
             root_path=root_path,
             data_name=data_name,
+            target_col=target_col,
             data_dir=data_dir,
         )
     elif input_mode == "multivariate":
         path = ensure_ett_multivariate_csv(
             root_path=root_path,
             data_name=data_name,
+            target_col=target_col,
             data_dir=data_dir,
         )
     else:
@@ -139,6 +122,21 @@ def get_file_path(
 
 
 def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
+    """
+    Gera features temporais simples.
+
+    ETTh:
+        mês, dia, dia da semana, hora
+
+    ETTm:
+        mês, dia, dia da semana, hora, bloco de 15 minutos
+
+    Weather:
+        mês, dia, dia da semana, hora, bloco de 10 minutos
+
+    Exchange:
+        mês, dia, dia da semana
+    """
     df_stamp = df_stamp.copy()
     df_stamp["date"] = pd.to_datetime(df_stamp["date"])
 
@@ -150,27 +148,80 @@ def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
     if data_name in {"ETTm1", "ETTm2"}:
         df_stamp["minute"] = (df_stamp["date"].dt.minute // 15).astype(int)
         cols = ["month", "day", "weekday", "hour", "minute"]
+
+    elif data_name == "Weather":
+        df_stamp["minute"] = (df_stamp["date"].dt.minute // 10).astype(int)
+        cols = ["month", "day", "weekday", "hour", "minute"]
+
+    elif data_name == "Exchange":
+        cols = ["month", "day", "weekday"]
+
     else:
         cols = ["month", "day", "weekday", "hour"]
 
     return df_stamp[cols].to_numpy(dtype=np.int64)
 
 
-def get_borders(data_name: str, seq_len: int) -> tuple[list[int], list[int]]:
+def get_borders(
+    data_name: str,
+    seq_len: int,
+    total_len: int | None = None,
+) -> tuple[list[int], list[int]]:
+    """
+    Define as bordas temporais de treino, validação e teste.
+
+    Para ETTh1/ETTh2/ETTm1/ETTm2:
+        mantém a divisão clássica dos benchmarks ETT.
+
+    Para Weather/Exchange:
+        usa divisão proporcional 70% treino, 10% validação e 20% teste.
+    """
+
     if data_name in {"ETTh1", "ETTh2"}:
         train = 12 * 30 * 24
         val = 4 * 30 * 24
         test = 4 * 30 * 24
-    elif data_name in {"ETTm1", "ETTm2"}:
+
+        border1s = [0, train - seq_len, train + val - seq_len]
+        border2s = [train, train + val, train + val + test]
+
+        return border1s, border2s
+
+    if data_name in {"ETTm1", "ETTm2"}:
         train = 12 * 30 * 24 * 4
         val = 4 * 30 * 24 * 4
         test = 4 * 30 * 24 * 4
-    else:
-        raise ValueError(f"Dataset não suportado: {data_name}")
 
-    border1s = [0, train - seq_len, train + val - seq_len]
-    border2s = [train, train + val, train + val + test]
-    return border1s, border2s
+        border1s = [0, train - seq_len, train + val - seq_len]
+        border2s = [train, train + val, train + val + test]
+
+        return border1s, border2s
+
+    if data_name in {"Weather", "Exchange"}:
+        if total_len is None:
+            raise ValueError(
+                f"total_len precisa ser informado para {data_name}."
+            )
+
+        num_train = int(total_len * 0.7)
+        num_test = int(total_len * 0.2)
+        num_val = total_len - num_train - num_test
+
+        border1s = [
+            0,
+            max(0, num_train - seq_len),
+            max(0, num_train + num_val - seq_len),
+        ]
+
+        border2s = [
+            num_train,
+            num_train + num_val,
+            total_len,
+        ]
+
+        return border1s, border2s
+
+    raise ValueError(f"Dataset não suportado: {data_name}")
 
 
 class ETTGBTDataset(Dataset):
@@ -189,6 +240,9 @@ class ETTGBTDataset(Dataset):
         data_dir: str | Path = "./nixtla_cache",
     ):
         assert flag in {"train", "val", "test"}
+
+        if data_name not in ALLOWED_GROUPS:
+            raise ValueError(f"data_name deve ser um destes: {sorted(ALLOWED_GROUPS)}")
 
         self.root_path = root_path
         self.data_name = data_name
@@ -220,6 +274,7 @@ class ETTGBTDataset(Dataset):
             root_path=self.root_path,
             data_name=self.data_name,
             input_mode=self.input_mode,
+            target_col=self.target,
             data_dir=self.data_dir,
         )
 
@@ -227,8 +282,11 @@ class ETTGBTDataset(Dataset):
 
         if "date" not in df_raw.columns:
             raise ValueError(f"{Path(file_path).name} precisa ter a coluna 'date'.")
+
         if self.target not in df_raw.columns:
-            raise ValueError(f"{Path(file_path).name} precisa ter a coluna alvo '{self.target}'.")
+            raise ValueError(
+                f"{Path(file_path).name} precisa ter a coluna alvo '{self.target}'."
+            )
 
         if self.input_mode == "univariate":
             x_cols = [self.target]
@@ -241,12 +299,33 @@ class ETTGBTDataset(Dataset):
         df_y = df_raw[y_cols].copy()
 
         self.x_cols = x_cols
+        self.y_cols = y_cols
         self.enc_in = df_x.shape[1]
+        self.c_out = 1
 
-        border1s, border2s = get_borders(self.data_name, self.seq_len)
+        border1s, border2s = get_borders(
+            data_name=self.data_name,
+            seq_len=self.seq_len,
+            total_len=len(df_raw),
+        )
+
         set_type = {"train": 0, "val": 1, "test": 2}[self.flag]
         border1 = border1s[set_type]
         border2 = border2s[set_type]
+
+        if border2 <= border1:
+            raise ValueError(
+                f"Split inválido para {self.data_name} ({self.flag}): "
+                f"border1={border1}, border2={border2}."
+            )
+
+        if border2 - border1 < self.seq_len + self.pred_len:
+            raise ValueError(
+                f"Split muito pequeno para {self.data_name} ({self.flag}). "
+                f"Tamanho do split={border2 - border1}, "
+                f"seq_len={self.seq_len}, pred_len={self.pred_len}. "
+                f"Reduza seq_len/pred_len ou ajuste a divisão dos dados."
+            )
 
         # Fit dos scalers apenas no treino
         train_x = df_x.iloc[border1s[0]:border2s[0]].values.astype(np.float32)
@@ -279,6 +358,13 @@ class ETTGBTDataset(Dataset):
         else:
             length = border2 - border1
             self.data_stamp = np.zeros((length, 0), dtype=np.int64)
+
+        print(
+            f"[INFO] {self.data_name} | {self.flag} | "
+            f"input_mode={self.input_mode} | "
+            f"rows={len(self.data_x)} | enc_in={self.enc_in} | "
+            f"x_cols={self.x_cols}"
+        )
 
     def __len__(self) -> int:
         return len(self.data_x) - self.seq_len - self.pred_len + 1
