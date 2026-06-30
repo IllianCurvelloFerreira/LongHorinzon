@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 from data_loader.preprocess_ett import preprocess_ett_dataset
 
@@ -14,6 +15,7 @@ from models.statistical.arima import (
     fit_forecast_arima_auto,
     fit_forecast_arima_statsmodels,
 )
+
 from models.statistical.sarima import (
     SARIMAConfig,
     fit_forecast_sarima_auto,
@@ -195,6 +197,30 @@ def train_val_test_split_time_1d(
     return train, val, test
 
 
+def standardize_splits(
+    train: np.ndarray,
+    val: np.ndarray,
+    test: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
+    """
+    Normaliza treino, validação e teste usando StandardScaler.
+
+    Importante:
+        O scaler é ajustado apenas no treino.
+        Validação e teste são transformados com os parâmetros do treino.
+
+    Isso evita vazamento de dados e deixa ARIMA/SARIMA comparáveis
+    com modelos neurais avaliados em escala padronizada.
+    """
+    scaler = StandardScaler()
+
+    train_scaled = scaler.fit_transform(train.reshape(-1, 1)).reshape(-1)
+    val_scaled = scaler.transform(val.reshape(-1, 1)).reshape(-1)
+    test_scaled = scaler.transform(test.reshape(-1, 1)).reshape(-1)
+
+    return train_scaled, val_scaled, test_scaled, scaler
+
+
 def mse_mae(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, float]:
     y_true = y_true.astype(np.float64)
     y_pred = y_pred.astype(np.float64)
@@ -218,18 +244,33 @@ def rolling_origin_eval(
     sarima_light: bool = True,
     use_auto_arima: bool = False,
     progress_prefix: str = "",
+    normalize_eval: bool = True,
 ) -> Metrics:
     """
     Avaliação rolling-origin apenas no conjunto de teste.
 
     A janela histórica é expansiva:
         treino + validação + parte já observada do teste
+
+    Por padrão, a avaliação é feita em escala normalizada:
+        - scaler ajustado apenas no treino;
+        - validação e teste transformados com o scaler do treino;
+        - métricas calculadas na escala padronizada.
+
+    Isso corrige o problema do Weather aparecer com MSE muito alto
+    apenas por estar em escala original.
     """
     train, val, test = train_val_test_split_time_1d(
         y,
         train_ratio=train_ratio,
         val_ratio=val_ratio,
     )
+
+    if normalize_eval:
+        train, val, test, _ = standardize_splits(train, val, test)
+        metric_scale = "standardized"
+    else:
+        metric_scale = "original"
 
     hist_base = np.concatenate([train, val])
 
@@ -253,6 +294,12 @@ def rolling_origin_eval(
         raise ValueError(
             f"Nenhuma origem válida para horizon={horizon}, test_len={n_test}."
         )
+
+    print(
+        f"{progress_prefix}[INFO] metric_scale={metric_scale} | "
+        f"train={len(train)} | val={len(val)} | test={len(test)} | "
+        f"origins={len(origins)}"
+    )
 
     preds_all: List[np.ndarray] = []
     trues_all: List[np.ndarray] = []
@@ -336,11 +383,14 @@ def run_single_experiment(args, model_kind: str) -> Metrics:
 
     stride = None if args.stride_mode == "H" else 1
 
+    normalize_eval = getattr(args, "normalize_eval", True)
+
     print(
         f"\n--- {model_kind} | data={args.data} | "
         f"horizon={args.horizon} | seasonal_m={m} | "
         f"stride={('H' if stride is None else stride)} | "
-        f"max_origins={args.max_origins} ---"
+        f"max_origins={args.max_origins} | "
+        f"normalize_eval={normalize_eval} ---"
     )
 
     metrics = rolling_origin_eval(
@@ -356,6 +406,7 @@ def run_single_experiment(args, model_kind: str) -> Metrics:
         sarima_light=args.sarima_light,
         use_auto_arima=args.use_auto_arima,
         progress_prefix="  ",
+        normalize_eval=normalize_eval,
     )
 
     print(f"{model_kind}: MSE={metrics.mse:.6f} | MAE={metrics.mae:.6f}")
@@ -372,6 +423,9 @@ def run_benchmark(args) -> pd.DataFrame:
     horizons = [args.horizon] if not args.run_all_horizons else [96, 192, 336, 720]
 
     rows = []
+
+    normalize_eval = getattr(args, "normalize_eval", True)
+    metric_scale = "standardized" if normalize_eval else "original"
 
     for ds in datasets:
         args.data = ds
@@ -396,6 +450,7 @@ def run_benchmark(args) -> pd.DataFrame:
                         "max_origins": args.max_origins,
                         "auto_arima": args.use_auto_arima,
                         "sarima_light": args.sarima_light,
+                        "metric_scale": metric_scale,
                     }
                 )
 
