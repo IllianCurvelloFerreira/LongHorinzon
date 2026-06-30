@@ -9,7 +9,15 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--root_path", type=str, default="./data/ETT")
-    parser.add_argument("--data", type=str, default="ETTh1", choices=["ETTh1", "ETTh2", "ETTm1", "ETTm2"])
+    parser.add_argument("--data_dir", type=str, default="./nixtla_cache")
+
+    parser.add_argument(
+        "--data",
+        type=str,
+        default="ETTh1",
+        choices=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"],
+    )
+
     parser.add_argument("--target", type=str, default="OT")
 
     parser.add_argument("--horizon", type=int, default=96)
@@ -19,7 +27,13 @@ def parse_args():
     parser.add_argument("--train_ratio", type=float, default=0.6)
     parser.add_argument("--val_ratio", type=float, default=0.2)
 
-    parser.add_argument("--models", nargs="+", default=["ARIMA", "SARIMA"], choices=["ARIMA", "SARIMA"])
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=["ARIMA", "SARIMA"],
+        choices=["ARIMA", "SARIMA"],
+    )
+
     parser.add_argument("--use_auto_arima", action="store_true")
     parser.add_argument("--sarima_light", action="store_true")
     parser.add_argument("--progress_every", type=int, default=2)
@@ -44,7 +58,7 @@ def main():
         print(f"\nResultados salvos em: {args.results_csv}")
 
     print("\n===== LATEX =====")
-    print(df_res.to_latex(index=False, float_format='%.4f'))
+    print(df_res.to_latex(index=False, float_format="%.4f"))
 
 
 if __name__ == "__main__":
