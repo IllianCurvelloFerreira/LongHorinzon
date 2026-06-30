@@ -15,10 +15,18 @@ def parse_args():
     parser.add_argument("--model", type=str, default="GBT")
     parser.add_argument("--root_path", type=str, default="./data/ETT")
     parser.add_argument("--data_dir", type=str, default="./nixtla_cache")
-    parser.add_argument("--data", type=str, default="ETTh1", choices=["ETTh1", "ETTh2", "ETTm1", "ETTm2"])
+
+    # Corrigido: agora aceita Weather e Exchange também
+    parser.add_argument(
+        "--data",
+        type=str,
+        default="ETTh1",
+        choices=["ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"],
+    )
+
     parser.add_argument("--target", type=str, default="OT")
 
-    # novo: modo de entrada
+    # Modo de entrada: univariado ou multivariado
     parser.add_argument(
         "--input_mode",
         type=str,
@@ -26,7 +34,7 @@ def parse_args():
         choices=["univariate", "multivariate"],
     )
 
-    # mantido por compatibilidade com seu comando atual
+    # Mantido por compatibilidade com os comandos atuais
     parser.add_argument("--features", type=str, default="S")
 
     parser.add_argument("--seq_len", type=int, default=168)
@@ -43,7 +51,13 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.05)
     parser.add_argument("--fd_model", type=int, default=32)
     parser.add_argument("--d_model", type=int, default=512)
-    parser.add_argument("--criterion", type=str, default="Standard", choices=["Standard", "MaxAbs"])
+    parser.add_argument(
+        "--criterion",
+        type=str,
+        default="Standard",
+        choices=["Standard", "MaxAbs"],
+    )
+
     parser.add_argument("--time", action="store_true")
     parser.add_argument("--test_inverse", action="store_true")
 
@@ -62,14 +76,26 @@ def main():
     device = get_device()
 
     metrics_runs = []
+
     for i in range(args.itr):
         run_seed = args.seed + i
-        metrics_runs.append(run_experiment(args, run_seed, device=device, set_seed_fn=set_seed))
+        metrics_runs.append(
+            run_experiment(
+                args,
+                run_seed,
+                device=device,
+                set_seed_fn=set_seed,
+            )
+        )
 
-    mse_mean = float(np.mean([m.mse for m in metrics_runs]))
-    mse_std = float(np.std([m.mse for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
-    mae_mean = float(np.mean([m.mae for m in metrics_runs]))
-    mae_std = float(np.std([m.mae for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
+    mse_values = [m.mse for m in metrics_runs]
+    mae_values = [m.mae for m in metrics_runs]
+
+    mse_mean = float(np.mean(mse_values))
+    mse_std = float(np.std(mse_values, ddof=1)) if len(metrics_runs) > 1 else 0.0
+
+    mae_mean = float(np.mean(mae_values))
+    mae_std = float(np.std(mae_values, ddof=1)) if len(metrics_runs) > 1 else 0.0
 
     print("\n===== MÉDIA FINAL =====")
     print(f"MSE: {mse_mean:.6f} ± {mse_std:.6f}")
