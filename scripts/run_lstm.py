@@ -9,7 +9,39 @@ from utils.device import get_device
 from utils.seed import set_seed
 
 
-ALL_DATASETS = ["ETTh1", "ETTh2", "ETTm1", "ETTm2"]
+# Os quatro datasets anteriores permanecem com os mesmos nomes e comportamento.
+# Weather e Exchange foram apenas adicionados às opções aceitas pelo script.
+ALL_DATASETS = [
+    "ETTh1",
+    "ETTh2",
+    "ETTm1",
+    "ETTm2",
+    "Weather",
+    "Exchange",
+]
+
+_DATASET_ALIASES = {
+    "etth1": "ETTh1",
+    "etth2": "ETTh2",
+    "ettm1": "ETTm1",
+    "ettm2": "ETTm2",
+    "weather": "Weather",
+    "wheather": "Weather",  # aceita a grafia alternativa comum
+    "exchange": "Exchange",
+    "exchange_rate": "Exchange",
+    "exchangerate": "Exchange",
+}
+
+
+def normalize_dataset_name(value: str) -> str:
+    """Normaliza o nome do dataset sem alterar os nomes internos esperados."""
+    normalized = _DATASET_ALIASES.get(value.strip().lower())
+    if normalized is None:
+        valid = ", ".join(ALL_DATASETS)
+        raise argparse.ArgumentTypeError(
+            f"Dataset inválido: {value!r}. Opções válidas: {valid}."
+        )
+    return normalized
 
 
 def parse_args():
@@ -17,7 +49,12 @@ def parse_args():
 
     parser.add_argument("--root_path", type=str, default="./data/ETT")
     parser.add_argument("--data_dir", type=str, default="./nixtla_cache")
-    parser.add_argument("--data", type=str, default="ETTh1", choices=ALL_DATASETS)
+    parser.add_argument(
+        "--data",
+        type=normalize_dataset_name,
+        default="ETTh1",
+        choices=ALL_DATASETS,
+    )
     parser.add_argument("--target", type=str, default="OT")
 
     parser.add_argument(
@@ -39,6 +76,7 @@ def parse_args():
     parser.add_argument("--horizon", type=int, default=96)
     parser.add_argument("--stride", type=int, default=1)
 
+    # Defaults preservados para não alterar as execuções anteriores.
     parser.add_argument("--train_ratio", type=float, default=0.6)
     parser.add_argument("--val_ratio", type=float, default=0.2)
 
@@ -65,6 +103,17 @@ def parse_args():
     if args.use_pls and args.pls_components <= 0:
         raise ValueError("Quando --use_pls for usado, --pls_components deve ser > 0.")
 
+    if not 0.0 < args.train_ratio < 1.0:
+        raise ValueError("--train_ratio deve estar entre 0 e 1.")
+
+    if not 0.0 < args.val_ratio < 1.0:
+        raise ValueError("--val_ratio deve estar entre 0 e 1.")
+
+    if args.train_ratio + args.val_ratio >= 1.0:
+        raise ValueError(
+            "A soma de --train_ratio e --val_ratio deve ser menor que 1."
+        )
+
     return args
 
 
@@ -85,10 +134,18 @@ def main():
         )
 
     mse_mean = float(np.mean([m.mse for m in metrics_runs]))
-    mse_std = float(np.std([m.mse for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
+    mse_std = (
+        float(np.std([m.mse for m in metrics_runs], ddof=1))
+        if len(metrics_runs) > 1
+        else 0.0
+    )
 
     mae_mean = float(np.mean([m.mae for m in metrics_runs]))
-    mae_std = float(np.std([m.mae for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
+    mae_std = (
+        float(np.std([m.mae for m in metrics_runs], ddof=1))
+        if len(metrics_runs) > 1
+        else 0.0
+    )
 
     print("\n===== MÉDIA FINAL =====")
     print(f"MSE: {mse_mean:.6f} ± {mse_std:.6f}")
