@@ -1,11 +1,13 @@
 # 📊 LongHorinzon: Benchmark for Long-Horizon Time Series Forecasting
 
-This repository provides a **modular benchmarking framework** for **long-horizon time series forecasting**, evaluated on the **ETT benchmark datasets**:
+This repository provides a **modular benchmarking framework** for **long-horizon time series forecasting**, evaluated on the **ETT benchmark datasets**, Weather and Exchange:
 
 - ETTh1
 - ETTh2
 - ETTm1
 - ETTm2
+- Weather
+- Exchange
 
 It includes implementations of:
 
@@ -173,10 +175,3 @@ All models use univariate forecasting (OT)
 Same train/val/test split
 Rolling-origin evaluation for statistical models
 Designed for fair comparison
-
-# 📌 Future Work
-
-Add TimeGPT / foundation models
-Hyperparameter search
-Ensemble methods
-Automated reporting (LaTeX tables)
