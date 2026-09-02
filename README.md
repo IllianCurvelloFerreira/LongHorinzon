@@ -113,23 +113,43 @@ Basic Example (ETTh1, Horizon=96)
 🔷 1. GBT
 
 ```bash
-!python -m scripts.run_gbt \
+python -m scripts.run_gbt \
   --model GBT \
   --root_path ./data/ETT \
-  --data ETTh1 \
-  --features S \
-  --seq_len 168 \
-  --label_len 168 \
-  --pred_len 96 \
+  --data <DATASET> \
+  --features <S|M> \
+  --seq_len <HORIZON> \
+  --label_len <HORIZON> \
+  --pred_len <HORIZON> \
   --s_layers 3,2,1 \
   --d_layers 2 \
-  --itr 5 \
   --learning_rate 0.0001 \
   --dropout 0.05 \
   --fd_model 32 \
   --d_model 512 \
   --criterion Standard \
-  --train_epochs 1
+  --train_epochs <EPOCHS>
+```
+Example:
+
+```bash
+python -m scripts.run_gbt \
+  --model GBT \
+  --root_path ./data/ETT \
+  --data ETTh1 \
+  --features S \
+  --seq_len 96 \
+  --label_len 96 \
+  --pred_len 96 \
+  --s_layers 3,2,1 \
+  --d_layers 2 \
+  --learning_rate 0.0001 \
+  --dropout 0.05 \
+  --fd_model 32 \
+  --d_model 512 \
+  --criterion Standard \
+  --train_epochs 10
+
 ```
 
 🔷 2. TOEformer
@@ -137,9 +157,29 @@ Basic Example (ETTh1, Horizon=96)
 ```bash
 python -m scripts.run_toeformer \
   --root_path ./data/ETT \
+  --data <DATASET> \
+  --target OT \
+  --features <S|M> \
+  --lookback <HORIZON> \
+  --horizon <HORIZON> \
+  --train_epochs <EPOCHS> \
+  --batch_size 32 \
+  --learning_rate 1e-4 \
+  --d_model 128 \
+  --n_heads 4 \
+  --lam2 <LRVE>
+```
+
+Example with LRVE:
+
+
+```bash
+python -m scripts.run_toeformer \
+  --root_path ./data/ETT \
   --data ETTh1 \
   --target OT \
-  --lookback 336 \
+  --features S \
+  --lookback 96 \
   --horizon 96 \
   --train_epochs 10 \
   --batch_size 32 \
@@ -160,6 +200,20 @@ Without LRVE:
 ```bash
 python -m scripts.run_arima_sarima \
   --root_path ./data/ETT \
+  --data <DATASET> \
+  --target OT \
+  --horizon <HORIZON> \
+  --stride_mode H \
+  --max_origins <N_ORIGINS> \
+  --models ARIMA SARIMA \
+  --sarima_light
+```
+
+Example:
+
+```bash
+python -m scripts.run_arima_sarima \
+  --root_path ./data/ETT \
   --data ETTh1 \
   --target OT \
   --horizon 96 \
@@ -168,10 +222,3 @@ python -m scripts.run_arima_sarima \
   --models ARIMA SARIMA \
   --sarima_light
 ```
-
-# 🧠 Research Notes
-
-All models use univariate forecasting (OT)
-Same train/val/test split
-Rolling-origin evaluation for statistical models
-Designed for fair comparison
