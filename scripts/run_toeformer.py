@@ -91,6 +91,14 @@ def parse_args():
 
     parser.add_argument("--run_all", action="store_true")
     parser.add_argument("--results_csv", type=str, default="")
+    parser.add_argument(
+        "--smape_diagnostics",
+        action="store_true",
+        help=(
+            "Mostra o sMAPE do teste por faixas de |y_true| "
+            "sem alterar treinamento ou métricas."
+        ),
+    )
 
     args = parser.parse_args()
 

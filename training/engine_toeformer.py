@@ -120,6 +120,145 @@ def evaluate(
     return mse, mae, smape
 
 
+
+@torch.no_grad()
+def print_smape_diagnostics(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str,
+    output_mean: np.ndarray,
+    output_scale: np.ndarray,
+):
+    """
+    Diagnóstico complementar do sMAPE por faixa de magnitude do valor real.
+
+    Não altera treinamento, seleção do melhor checkpoint ou métricas finais.
+    Apenas reavalia o conjunto de teste com o melhor modelo já carregado.
+
+    As faixas são definidas pelo valor absoluto de y na escala original:
+        |y| < 1
+        1 <= |y| < 2
+        2 <= |y| < 5
+        5 <= |y| < 10
+        |y| >= 10
+    """
+    model.eval()
+
+    mean_t = torch.as_tensor(
+        output_mean,
+        dtype=torch.float32,
+        device=device,
+    ).view(1, 1, -1)
+
+    scale_t = torch.as_tensor(
+        output_scale,
+        dtype=torch.float32,
+        device=device,
+    ).view(1, 1, -1)
+
+    eps = 1e-8
+
+    y_true_all = []
+    y_pred_all = []
+
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
+
+        y_hat, _, _ = model(x)
+
+        y_original = y * scale_t + mean_t
+        y_hat_original = y_hat * scale_t + mean_t
+
+        y_true_all.append(
+            y_original.detach().cpu().numpy().reshape(-1)
+        )
+        y_pred_all.append(
+            y_hat_original.detach().cpu().numpy().reshape(-1)
+        )
+
+    y_true = np.concatenate(y_true_all)
+    y_pred = np.concatenate(y_pred_all)
+
+    abs_y = np.abs(y_true)
+
+    denominator = np.abs(y_true) + np.abs(y_pred)
+    smape_point = (
+        200.0
+        * np.abs(y_pred - y_true)
+        / np.maximum(denominator, eps)
+    )
+
+    abs_error = np.abs(y_pred - y_true)
+
+    buckets = [
+        ("|y| < 1", abs_y < 1.0),
+        ("1 <= |y| < 2", (abs_y >= 1.0) & (abs_y < 2.0)),
+        ("2 <= |y| < 5", (abs_y >= 2.0) & (abs_y < 5.0)),
+        ("5 <= |y| < 10", (abs_y >= 5.0) & (abs_y < 10.0)),
+        ("|y| >= 10", abs_y >= 10.0),
+    ]
+
+    total = len(y_true)
+
+    print("\n===== DIAGNÓSTICO sMAPE NO TESTE =====")
+    print(
+        "Faixa baseada em |y_true| na escala original. "
+        "Os elementos correspondem às previsões das janelas do teste."
+    )
+    print(
+        f"{'Faixa':<18} "
+        f"{'N':>10} "
+        f"{'% amostra':>11} "
+        f"{'sMAPE':>10} "
+        f"{'MAE orig.':>12}"
+    )
+    print("-" * 66)
+
+    for label, mask in buckets:
+        count = int(mask.sum())
+
+        if count == 0:
+            print(
+                f"{label:<18} "
+                f"{0:>10d} "
+                f"{0.0:>10.2f}% "
+                f"{'-':>10} "
+                f"{'-':>12}"
+            )
+            continue
+
+        share = 100.0 * count / total
+        bucket_smape = float(np.mean(smape_point[mask]))
+        bucket_mae = float(np.mean(abs_error[mask]))
+
+        print(
+            f"{label:<18} "
+            f"{count:>10d} "
+            f"{share:>10.2f}% "
+            f"{bucket_smape:>9.2f}% "
+            f"{bucket_mae:>12.4f}"
+        )
+
+    print("-" * 66)
+    print(
+        f"{'TOTAL':<18} "
+        f"{total:>10d} "
+        f"{100.0:>10.2f}% "
+        f"{float(np.mean(smape_point)):>9.2f}% "
+        f"{float(np.mean(abs_error)):>12.4f}"
+    )
+
+    negative_share = 100.0 * np.mean(y_true <= 0.0)
+    near_zero_share = 100.0 * np.mean(abs_y < 2.0)
+
+    print(
+        f"\nValores com y_true <= 0: {negative_share:.2f}%"
+    )
+    print(
+        f"Valores com |y_true| < 2: {near_zero_share:.2f}%"
+    )
+
 def apply_multivariate_pca(
     train_series: np.ndarray,
     val_series: np.ndarray,
@@ -683,6 +822,15 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
         f"MAE={test_mae:.6f} | "
         f"sMAPE={test_smape:.2f}%"
     )
+
+    if getattr(args, "smape_diagnostics", False):
+        print_smape_diagnostics(
+            model=model,
+            loader=test_loader,
+            device=device,
+            output_mean=output_mean,
+            output_scale=output_scale,
+        )
 
     return Metrics(
         mse=test_mse,
