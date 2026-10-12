@@ -55,53 +55,63 @@ def load_ett_long(
     group: str,
     normalize: bool = False,
 ) -> pd.DataFrame:
+
     if group not in ALLOWED_GROUPS:
         raise ValueError(f"group inválido: {group}")
 
-    # Caso especial:
-    # Exchange não está disponível no LongHorizon2.
-    # Para não alterar o comportamento dos datasets que já funcionaram,
-    # apenas Exchange usa LongHorizon.
-    if group == "Exchange":
-        if LongHorizon is None:
-            raise ImportError(
-                "LongHorizon não está disponível. "
-                "Verifique a instalação do pacote datasetsforecast."
+    last_error = None
+
+    # =====================================================
+    # TENTA LONGHORIZON2 PRIMEIRO
+    # =====================================================
+    if group != "Exchange" and LongHorizon2 is not None:
+
+        try:
+            print(f"[INFO] Carregando {group} via LongHorizon2")
+
+            return _load_dataset_with_optional_normalize(
+                loader=LongHorizon2,
+                data_dir=data_dir,
+                group=group,
+                normalize=normalize,
             )
 
-        print("[INFO] Carregando Exchange via LongHorizon")
-        return _load_dataset_with_optional_normalize(
-            loader=LongHorizon,
-            data_dir=data_dir,
-            group=group,
-            normalize=normalize,
-        )
+        except Exception as e:
 
-    # Para ETTh1, ETTh2, ETTm1, ETTm2 e Weather:
-    # mantém o comportamento anterior usando LongHorizon2.
-    if LongHorizon2 is not None:
-        print(f"[INFO] Carregando {group} via LongHorizon2")
-        return _load_dataset_with_optional_normalize(
-            loader=LongHorizon2,
-            data_dir=data_dir,
-            group=group,
-            normalize=normalize,
-        )
+            last_error = e
 
-    # Fallback apenas se LongHorizon2 não existir no ambiente.
-    # Isso preserva a lógica antiga, que usava LongHorizon como alternativa.
+            print(
+                f"[WARN] LongHorizon2 falhou para {group}: {e}"
+            )
+
+            print(
+                f"[INFO] Tentando {group} via LongHorizon..."
+            )
+
+    # =====================================================
+    # FALLBACK LONGHORIZON
+    # =====================================================
     if LongHorizon is not None:
-        print(f"[WARN] LongHorizon2 indisponível. Carregando {group} via LongHorizon")
-        return _load_dataset_with_optional_normalize(
-            loader=LongHorizon,
-            data_dir=data_dir,
-            group=group,
-            normalize=normalize,
-        )
 
-    raise ImportError(
-        "Nenhum loader disponível. "
-        "Verifique a instalação de datasetsforecast."
+        try:
+
+            return _load_dataset_with_optional_normalize(
+                loader=LongHorizon,
+                data_dir=data_dir,
+                group=group,
+                normalize=normalize,
+            )
+
+        except Exception as e:
+
+            last_error = e
+
+    # =====================================================
+    # NENHUM LOADER FUNCIONOU
+    # =====================================================
+    raise RuntimeError(
+        f"Não foi possível carregar o dataset '{group}'. "
+        f"Último erro: {last_error}"
     )
 
 
