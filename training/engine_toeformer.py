@@ -27,6 +27,7 @@ from models.toeformer.model import TOEformer
 class Metrics:
     mse: float
     mae: float
+    smape: float
 
 
 class TabularAutoencoder(nn.Module):
@@ -50,9 +51,33 @@ class TabularAutoencoder(nn.Module):
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: str):
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str,
+    output_mean: np.ndarray,
+    output_scale: np.ndarray,
+):
     model.eval()
-    mse_sum, mae_sum, n = 0.0, 0.0, 0
+
+    mse_sum = 0.0
+    mae_sum = 0.0
+    smape_sum = 0.0
+    n = 0
+
+    mean_t = torch.as_tensor(
+        output_mean,
+        dtype=torch.float32,
+        device=device,
+    ).view(1, 1, -1)
+
+    scale_t = torch.as_tensor(
+        output_scale,
+        dtype=torch.float32,
+        device=device,
+    ).view(1, 1, -1)
+
+    eps = 1e-8
 
     for x, y in loader:
         x = x.to(device)
@@ -60,11 +85,39 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str):
 
         y_hat, _, _ = model(x)
 
-        mse_sum += torch.nn.functional.mse_loss(y_hat, y, reduction="sum").item()
-        mae_sum += torch.nn.functional.l1_loss(y_hat, y, reduction="sum").item()
+        # Mantém MSE e MAE no espaço normalizado, preservando o benchmark atual.
+        mse_sum += torch.nn.functional.mse_loss(
+            y_hat,
+            y,
+            reduction="sum",
+        ).item()
+
+        mae_sum += torch.nn.functional.l1_loss(
+            y_hat,
+            y,
+            reduction="sum",
+        ).item()
+
+        # O sMAPE é calculado na escala original da série.
+        y_original = y * scale_t + mean_t
+        y_hat_original = y_hat * scale_t + mean_t
+
+        denominator = torch.abs(y_original) + torch.abs(y_hat_original)
+
+        smape_values = (
+            2.0
+            * torch.abs(y_hat_original - y_original)
+            / torch.clamp(denominator, min=eps)
+        )
+
+        smape_sum += smape_values.sum().item()
         n += y.numel()
 
-    return mse_sum / n, mae_sum / n
+    mse = mse_sum / n
+    mae = mae_sum / n
+    smape = 100.0 * smape_sum / n
+
+    return mse, mae, smape
 
 
 def apply_multivariate_pca(
@@ -294,6 +347,9 @@ def build_loaders(args, device: str):
         val_series = scaler.transform(val_series).astype(np.float32)
         test_series = scaler.transform(test_series).astype(np.float32)
 
+        output_mean = scaler.mean_.astype(np.float32)
+        output_scale = scaler.scale_.astype(np.float32)
+
         train_ds = SlidingWindowDataset(
             train_series,
             lookback=args.lookback,
@@ -321,6 +377,7 @@ def build_loaders(args, device: str):
             data_dir=args.data_dir,
         )
 
+        original_target_idx = target_idx
         feature_dim = len(feature_cols)
 
         train_series, val_series, test_series = train_val_test_split_time(
@@ -333,6 +390,19 @@ def build_loaders(args, device: str):
         train_series = scaler.fit_transform(train_series).astype(np.float32)
         val_series = scaler.transform(val_series).astype(np.float32)
         test_series = scaler.transform(test_series).astype(np.float32)
+
+        if args.output_mode == "multivariate":
+            output_mean = scaler.mean_.astype(np.float32)
+            output_scale = scaler.scale_.astype(np.float32)
+        else:
+            output_mean = np.array(
+                [scaler.mean_[original_target_idx]],
+                dtype=np.float32,
+            )
+            output_scale = np.array(
+                [scaler.scale_[original_target_idx]],
+                dtype=np.float32,
+            )
 
         if args.use_pca:
             train_series, val_series, test_series, target_idx, feature_dim = apply_multivariate_pca(
@@ -443,7 +513,15 @@ def build_loaders(args, device: str):
         num_workers=args.num_workers,
     )
 
-    return train_loader, val_loader, test_loader, target_idx, feature_dim
+    return (
+        train_loader,
+        val_loader,
+        test_loader,
+        target_idx,
+        feature_dim,
+        output_mean,
+        output_scale,
+    )
 
 
 def build_decomposition_target(
@@ -482,7 +560,15 @@ def build_decomposition_target(
 def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     set_seed_fn(run_seed)
 
-    train_loader, val_loader, test_loader, target_idx, feature_dim = build_loaders(
+    (
+        train_loader,
+        val_loader,
+        test_loader,
+        target_idx,
+        feature_dim,
+        output_mean,
+        output_scale,
+    ) = build_loaders(
         args,
         device=device,
     )
@@ -557,7 +643,13 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
-        val_mse, val_mae = evaluate(model, val_loader, device)
+        val_mse, val_mae, val_smape = evaluate(
+            model,
+            val_loader,
+            device,
+            output_mean,
+            output_scale,
+        )
 
         if val_mse < best_val:
             best_val = val_mse
@@ -570,13 +662,30 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
             f"Epoch {epoch:02d} | "
             f"Val MSE={val_mse:.6f} | "
             f"Val MAE={val_mae:.6f} | "
+            f"Val sMAPE={val_smape:.2f}% | "
             f"Best={best_val:.6f}"
         )
 
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    test_mse, test_mae = evaluate(model, test_loader, device)
-    print(f"TEST | MSE={test_mse:.6f} | MAE={test_mae:.6f}")
+    test_mse, test_mae, test_smape = evaluate(
+        model,
+        test_loader,
+        device,
+        output_mean,
+        output_scale,
+    )
 
-    return Metrics(mse=test_mse, mae=test_mae)
+    print(
+        f"TEST | "
+        f"MSE={test_mse:.6f} | "
+        f"MAE={test_mae:.6f} | "
+        f"sMAPE={test_smape:.2f}%"
+    )
+
+    return Metrics(
+        mse=test_mse,
+        mae=test_mae,
+        smape=test_smape,
+    )

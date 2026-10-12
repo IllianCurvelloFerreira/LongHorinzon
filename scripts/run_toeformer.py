@@ -143,11 +143,20 @@ def summarize_metrics(metrics_runs):
     mae_mean = float(np.mean([m.mae for m in metrics_runs]))
     mae_std = float(np.std([m.mae for m in metrics_runs], ddof=1)) if len(metrics_runs) > 1 else 0.0
 
+    smape_mean = float(np.mean([m.smape for m in metrics_runs]))
+    smape_std = (
+        float(np.std([m.smape for m in metrics_runs], ddof=1))
+        if len(metrics_runs) > 1
+        else 0.0
+    )
+
     return {
         "mse_mean": mse_mean,
         "mse_std": mse_std,
         "mae_mean": mae_mean,
         "mae_std": mae_std,
+        "smape_mean": smape_mean,
+        "smape_std": smape_std,
     }
 
 
@@ -170,6 +179,11 @@ def run_single_dataset(args, device: str):
     print("\n===== MÉDIA FINAL =====")
     print(f"MSE: {summary['mse_mean']:.6f} ± {summary['mse_std']:.6f}")
     print(f"MAE: {summary['mae_mean']:.6f} ± {summary['mae_std']:.6f}")
+    print(
+        f"sMAPE: "
+        f"{summary['smape_mean']:.2f}% ± "
+        f"{summary['smape_std']:.2f}%"
+    )
 
     return summary
 
@@ -220,6 +234,8 @@ def run_all_datasets(args, device: str):
                 "mse_std": summary["mse_std"],
                 "mae_mean": summary["mae_mean"],
                 "mae_std": summary["mae_std"],
+                "smape_mean": summary["smape_mean"],
+                "smape_std": summary["smape_std"],
             }
         )
 
