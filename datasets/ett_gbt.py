@@ -22,10 +22,6 @@ def ensure_ett_csv(
 ) -> Path:
     """
     Garante que o CSV univariado exista.
-    Exemplo:
-        data/ETT/ETTh1.csv
-        data/ETT/Weather.csv
-        data/ETT/Exchange.csv
     """
     if data_name not in ALLOWED_GROUPS:
         raise ValueError(f"data_name deve ser um destes: {sorted(ALLOWED_GROUPS)}")
@@ -62,10 +58,6 @@ def ensure_ett_multivariate_csv(
 ) -> Path:
     """
     Garante que o CSV multivariado exista.
-    Exemplo:
-        data/ETT/ETTh1_multivariate.csv
-        data/ETT/Weather_multivariate.csv
-        data/ETT/Exchange_multivariate.csv
     """
     if data_name not in ALLOWED_GROUPS:
         raise ValueError(f"data_name deve ser um destes: {sorted(ALLOWED_GROUPS)}")
@@ -122,21 +114,6 @@ def get_file_path(
 
 
 def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
-    """
-    Gera features temporais simples.
-
-    ETTh:
-        mês, dia, dia da semana, hora
-
-    ETTm:
-        mês, dia, dia da semana, hora, bloco de 15 minutos
-
-    Weather:
-        mês, dia, dia da semana, hora, bloco de 10 minutos
-
-    Exchange:
-        mês, dia, dia da semana
-    """
     df_stamp = df_stamp.copy()
     df_stamp["date"] = pd.to_datetime(df_stamp["date"])
 
@@ -148,35 +125,76 @@ def time_features(df_stamp: pd.DataFrame, data_name: str) -> np.ndarray:
     if data_name in {"ETTm1", "ETTm2"}:
         df_stamp["minute"] = (df_stamp["date"].dt.minute // 15).astype(int)
         cols = ["month", "day", "weekday", "hour", "minute"]
-
     elif data_name == "Weather":
         df_stamp["minute"] = (df_stamp["date"].dt.minute // 10).astype(int)
         cols = ["month", "day", "weekday", "hour", "minute"]
-
     elif data_name == "Exchange":
         cols = ["month", "day", "weekday"]
-
     else:
         cols = ["month", "day", "weekday", "hour"]
 
     return df_stamp[cols].to_numpy(dtype=np.int64)
 
 
+def _ratio_borders(
+    total_len: int,
+    seq_len: int,
+    train_ratio: float,
+    val_ratio: float,
+) -> tuple[list[int], list[int]]:
+    if not (0.0 < train_ratio < 1.0):
+        raise ValueError("train_ratio deve estar entre 0 e 1.")
+    if not (0.0 < val_ratio < 1.0):
+        raise ValueError("val_ratio deve estar entre 0 e 1.")
+    if train_ratio + val_ratio >= 1.0:
+        raise ValueError("train_ratio + val_ratio deve ser menor que 1.")
+
+    num_train = int(total_len * train_ratio)
+    num_val = int(total_len * val_ratio)
+
+    border1s = [
+        0,
+        max(0, num_train - seq_len),
+        max(0, num_train + num_val - seq_len),
+    ]
+    border2s = [
+        num_train,
+        num_train + num_val,
+        total_len,
+    ]
+
+    return border1s, border2s
+
+
 def get_borders(
     data_name: str,
     seq_len: int,
     total_len: int | None = None,
+    split_mode: str = "legacy",
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.1,
 ) -> tuple[list[int], list[int]]:
     """
-    Define as bordas temporais de treino, validação e teste.
+    split_mode='legacy': preserva exatamente a divisão histórica do GBT.
 
-    Para ETTh1/ETTh2/ETTm1/ETTm2:
-        mantém a divisão clássica dos benchmarks ETT.
-
-    Para Weather/Exchange:
-        usa divisão proporcional 70% treino, 10% validação e 20% teste.
+    split_mode='ratio': usa divisão proporcional, mantendo o histórico imediatamente
+    anterior como contexto de entrada para validação e teste. Os targets continuam
+    pertencendo apenas ao respectivo split.
     """
+    if split_mode not in {"legacy", "ratio"}:
+        raise ValueError("split_mode deve ser 'legacy' ou 'ratio'.")
 
+    if split_mode == "ratio":
+        if total_len is None:
+            raise ValueError("total_len é obrigatório quando split_mode='ratio'.")
+        return _ratio_borders(
+            total_len=total_len,
+            seq_len=seq_len,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+        )
+
+    # Modo legacy: comportamento anterior preservado.
     if data_name in {"ETTh1", "ETTh2"}:
         train = 12 * 30 * 24
         val = 4 * 30 * 24
@@ -184,7 +202,6 @@ def get_borders(
 
         border1s = [0, train - seq_len, train + val - seq_len]
         border2s = [train, train + val, train + val + test]
-
         return border1s, border2s
 
     if data_name in {"ETTm1", "ETTm2"}:
@@ -194,32 +211,17 @@ def get_borders(
 
         border1s = [0, train - seq_len, train + val - seq_len]
         border2s = [train, train + val, train + val + test]
-
         return border1s, border2s
 
     if data_name in {"Weather", "Exchange"}:
         if total_len is None:
-            raise ValueError(
-                f"total_len precisa ser informado para {data_name}."
-            )
-
-        num_train = int(total_len * 0.7)
-        num_test = int(total_len * 0.2)
-        num_val = total_len - num_train - num_test
-
-        border1s = [
-            0,
-            max(0, num_train - seq_len),
-            max(0, num_train + num_val - seq_len),
-        ]
-
-        border2s = [
-            num_train,
-            num_train + num_val,
-            total_len,
-        ]
-
-        return border1s, border2s
+            raise ValueError(f"total_len precisa ser informado para {data_name}.")
+        return _ratio_borders(
+            total_len=total_len,
+            seq_len=seq_len,
+            train_ratio=0.7,
+            val_ratio=0.1,
+        )
 
     raise ValueError(f"Dataset não suportado: {data_name}")
 
@@ -238,6 +240,9 @@ class ETTGBTDataset(Dataset):
         use_time: bool = False,
         input_mode: str = "univariate",
         data_dir: str | Path = "./nixtla_cache",
+        split_mode: str = "legacy",
+        train_ratio: float = 0.7,
+        val_ratio: float = 0.1,
     ):
         assert flag in {"train", "val", "test"}
 
@@ -255,6 +260,9 @@ class ETTGBTDataset(Dataset):
         self.use_time = use_time
         self.input_mode = input_mode
         self.data_dir = data_dir
+        self.split_mode = split_mode
+        self.train_ratio = train_ratio
+        self.val_ratio = val_ratio
 
         self.scaler_x = None
         self.scaler_y = None
@@ -307,6 +315,9 @@ class ETTGBTDataset(Dataset):
             data_name=self.data_name,
             seq_len=self.seq_len,
             total_len=len(df_raw),
+            split_mode=self.split_mode,
+            train_ratio=self.train_ratio,
+            val_ratio=self.val_ratio,
         )
 
         set_type = {"train": 0, "val": 1, "test": 2}[self.flag]
@@ -327,7 +338,7 @@ class ETTGBTDataset(Dataset):
                 f"Reduza seq_len/pred_len ou ajuste a divisão dos dados."
             )
 
-        # Fit dos scalers apenas no treino
+        # Fit dos scalers apenas no treino.
         train_x = df_x.iloc[border1s[0]:border2s[0]].values.astype(np.float32)
         full_x = df_x.values.astype(np.float32)
 
@@ -349,8 +360,8 @@ class ETTGBTDataset(Dataset):
         scaled_x = self.scaler_x.transform(full_x).astype(np.float32)
         scaled_y = self.scaler_y.transform(full_y).astype(np.float32)
 
-        self.data_x = scaled_x[border1:border2]  # [T_split, enc_in]
-        self.data_y = scaled_y[border1:border2]  # [T_split, 1]
+        self.data_x = scaled_x[border1:border2]
+        self.data_y = scaled_y[border1:border2]
 
         if self.use_time:
             df_stamp = df_raw[["date"]].iloc[border1:border2].copy()
@@ -361,6 +372,7 @@ class ETTGBTDataset(Dataset):
 
         print(
             f"[INFO] {self.data_name} | {self.flag} | "
+            f"split_mode={self.split_mode} | "
             f"input_mode={self.input_mode} | "
             f"rows={len(self.data_x)} | enc_in={self.enc_in} | "
             f"x_cols={self.x_cols}"
@@ -376,8 +388,8 @@ class ETTGBTDataset(Dataset):
         r_begin = s_end - self.label_len
         r_end = r_begin + self.label_len + self.pred_len
 
-        seq_x = self.data_x[s_begin:s_end]          # [seq_len, enc_in]
-        seq_y = self.data_y[r_begin:r_end]          # [label_len + pred_len, 1]
+        seq_x = self.data_x[s_begin:s_end]
+        seq_y = self.data_y[r_begin:r_end]
         seq_x_mark = self.data_stamp[s_begin:s_end]
         seq_y_mark = self.data_stamp[r_begin:r_end]
 
@@ -389,10 +401,6 @@ class ETTGBTDataset(Dataset):
         )
 
     def inverse_transform_y(self, arr: np.ndarray) -> np.ndarray:
-        """
-        Inverte apenas a escala da saída alvo.
-        arr shape esperado: [B, pred_len, 1]
-        """
         shape = arr.shape
         flat = arr.reshape(-1, shape[-1])
         inv = self.scaler_y.inverse_transform(flat)
