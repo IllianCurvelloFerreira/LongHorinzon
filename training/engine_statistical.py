@@ -9,19 +9,16 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
 from data_loader.preprocess_ett import preprocess_ett_dataset
-
 from models.statistical.arima import (
     ARIMAConfig,
     fit_forecast_arima_auto,
     fit_forecast_arima_statsmodels,
 )
-
 from models.statistical.sarima import (
     SARIMAConfig,
     fit_forecast_sarima_auto,
     fit_forecast_sarima_statsmodels,
 )
-
 
 ALLOWED_DATASETS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"}
 
@@ -30,6 +27,7 @@ ALLOWED_DATASETS = {"ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"}
 class Metrics:
     mse: float
     mae: float
+    smape: float
 
 
 def ensure_univariate_csv(
@@ -38,15 +36,7 @@ def ensure_univariate_csv(
     target_col: str = "OT",
     data_dir: str | Path = "./nixtla_cache",
 ) -> Path:
-    """
-    Garante que exista um CSV univariado no formato:
-        date, OT
-
-    Exemplos:
-        data/ETT/ETTh1.csv
-        data/ETT/Weather.csv
-        data/ETT/Exchange.csv
-    """
+    """Garante um CSV univariado disponível em root_path/<dataset>.csv."""
     if data_name not in ALLOWED_DATASETS:
         raise ValueError(f"data_name deve ser um destes: {sorted(ALLOWED_DATASETS)}")
 
@@ -56,7 +46,6 @@ def ensure_univariate_csv(
     if not csv_path.exists():
         print(f"[INFO] {csv_path} não encontrado. Gerando automaticamente...")
         root_path.mkdir(parents=True, exist_ok=True)
-
         try:
             preprocess_ett_dataset(
                 group=data_name,
@@ -67,6 +56,7 @@ def ensure_univariate_csv(
                 normalize=False,
             )
         except TypeError:
+            # Compatibilidade com versões antigas do preprocessador.
             preprocess_ett_dataset(
                 group=data_name,
                 data_dir=data_dir,
@@ -77,7 +67,6 @@ def ensure_univariate_csv(
         raise FileNotFoundError(
             f"Arquivo não encontrado mesmo após preprocessamento: {csv_path}"
         )
-
     return csv_path
 
 
@@ -87,77 +76,42 @@ def load_univariate_series(
     target_col: str = "OT",
     data_dir: str | Path = "./nixtla_cache",
 ) -> np.ndarray:
-    """
-    Carrega uma série univariada a partir de um CSV.
-
-    Para os experimentos deste projeto, a coluna alvo esperada é OT.
-    Caso o CSV tenha apenas uma coluna numérica além de date, ela é usada.
-    """
-    csv_path = ensure_univariate_csv(
-        root_path=root_path,
-        data_name=data_name,
-        target_col=target_col,
-        data_dir=data_dir,
-    )
-
+    """Carrega OT, substitui sentinela -9999 e preserva a ordem temporal."""
+    csv_path = ensure_univariate_csv(root_path, data_name, target_col, data_dir)
     df = pd.read_csv(csv_path)
-
-    if "date" in df.columns:
-        value_cols = [c for c in df.columns if c != "date"]
-    else:
-        value_cols = list(df.columns)
+    value_cols = [c for c in df.columns if c != "date"]
 
     if target_col not in df.columns:
         if len(value_cols) == 1:
             print(
-                f"[WARN] Coluna alvo '{target_col}' não encontrada em {csv_path.name}. "
-                f"Usando '{value_cols[0]}' como alvo."
+                f"[WARN] Coluna alvo '{target_col}' não encontrada em "
+                f"{csv_path.name}. Usando '{value_cols[0]}' como alvo."
             )
             target_col = value_cols[0]
         else:
             raise ValueError(
-                f"{csv_path.name} precisa ter a coluna alvo '{target_col}'. "
+                f"{csv_path.name} precisa ter a coluna '{target_col}'. "
                 f"Colunas disponíveis: {list(df.columns)}"
             )
 
     y = pd.to_numeric(df[target_col], errors="coerce")
     y = y.replace([np.inf, -np.inf, -9999, -9999.0], np.nan)
     y = y.interpolate(limit_direction="both").dropna()
-
-    if len(y) == 0:
+    if y.empty:
         raise ValueError(f"A série '{target_col}' em {csv_path.name} ficou vazia.")
-
     return y.to_numpy(dtype=np.float64)
 
 
 def seasonal_period_for_group(data_name: str) -> int:
-    """
-    Define o período sazonal usado no SARIMA.
-
-    ETTh:
-        frequência horária -> ciclo diário = 24
-
-    ETTm:
-        frequência de 15 minutos -> ciclo diário = 96
-
-    Weather:
-        frequência de 10 minutos -> ciclo diário = 144
-
-    Exchange:
-        frequência diária -> ciclo semanal = 7
-    """
+    """Ciclos sazonais: ETTh=24, ETTm=96, Weather=144, Exchange=7."""
     if data_name in {"ETTh1", "ETTh2"}:
         return 24
-
     if data_name in {"ETTm1", "ETTm2"}:
         return 96
-
     if data_name == "Weather":
         return 144
-
     if data_name == "Exchange":
         return 7
-
     raise ValueError(f"Dataset não suportado: {data_name}")
 
 
@@ -166,34 +120,23 @@ def train_val_test_split_time_1d(
     train_ratio: float = 0.6,
     val_ratio: float = 0.2,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Divide a série temporal em treino, validação e teste sem embaralhar.
-    """
+    """Split cronológico, sem embaralhamento: treino/validação/teste."""
     y = np.asarray(y, dtype=np.float64).reshape(-1)
-
     if not (0 < train_ratio < 1):
         raise ValueError("train_ratio deve estar entre 0 e 1.")
-
     if not (0 <= val_ratio < 1):
         raise ValueError("val_ratio deve estar entre 0 e 1.")
-
     if train_ratio + val_ratio >= 1:
         raise ValueError("train_ratio + val_ratio deve ser menor que 1.")
 
     n = len(y)
-
     train_end = int(n * train_ratio)
     val_end = train_end + int(n * val_ratio)
-
-    train = y[:train_end]
-    val = y[train_end:val_end]
-    test = y[val_end:]
-
-    if len(train) == 0 or len(val) == 0 or len(test) == 0:
+    train, val, test = y[:train_end], y[train_end:val_end], y[val_end:]
+    if min(len(train), len(val), len(test)) == 0:
         raise ValueError(
             f"Split inválido: train={len(train)}, val={len(val)}, test={len(test)}"
         )
-
     return train, val, test
 
 
@@ -202,33 +145,36 @@ def standardize_splits(
     val: np.ndarray,
     test: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
-    """
-    Normaliza treino, validação e teste usando StandardScaler.
-
-    Importante:
-        O scaler é ajustado apenas no treino.
-        Validação e teste são transformados com os parâmetros do treino.
-
-    Isso evita vazamento de dados e deixa ARIMA/SARIMA comparáveis
-    com modelos neurais avaliados em escala padronizada.
-    """
+    """Fit do StandardScaler somente no treino (mesma regra do projeto original)."""
     scaler = StandardScaler()
-
     train_scaled = scaler.fit_transform(train.reshape(-1, 1)).reshape(-1)
     val_scaled = scaler.transform(val.reshape(-1, 1)).reshape(-1)
     test_scaled = scaler.transform(test.reshape(-1, 1)).reshape(-1)
-
     return train_scaled, val_scaled, test_scaled, scaler
 
 
 def mse_mae(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, float]:
-    y_true = y_true.astype(np.float64)
-    y_pred = y_pred.astype(np.float64)
+    """Calcula MSE/MAE na escala em que as previsões são avaliadas."""
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    return (
+        float(np.mean((y_true - y_pred) ** 2)),
+        float(np.mean(np.abs(y_true - y_pred))),
+    )
 
-    mse = np.mean((y_true - y_pred) ** 2)
-    mae = np.mean(np.abs(y_true - y_pred))
 
-    return float(mse), float(mae)
+def smape_percent(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    eps: float = 1e-8,
+) -> float:
+    """sMAPE = média(2|y-yhat|/(|y|+|yhat|)) * 100, escala 0 a 200%."""
+    y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
+    if y_true.shape != y_pred.shape or y_true.size == 0:
+        raise ValueError("y_true e y_pred devem ter o mesmo formato não vazio.")
+    denominator = np.maximum(np.abs(y_true) + np.abs(y_pred), eps)
+    return float(100.0 * np.mean(2.0 * np.abs(y_true - y_pred) / denominator))
 
 
 def rolling_origin_eval(
@@ -246,61 +192,44 @@ def rolling_origin_eval(
     progress_prefix: str = "",
     normalize_eval: bool = True,
 ) -> Metrics:
+    """Avalia ARIMA/SARIMA por origens expansivas no conjunto de teste.
+
+    MSE e MAE mantêm a escala selecionada (padronizada por padrão).
+    sMAPE é SEMPRE calculado sobre OT na escala original, inclusive quando
+    normalize_eval=True. Previsões e observações são concatenadas antes de
+    calcular cada métrica, para dar peso igual a cada ponto previsto.
     """
-    Avaliação rolling-origin apenas no conjunto de teste.
+    train, val, test = train_val_test_split_time_1d(y, train_ratio, val_ratio)
 
-    A janela histórica é expansiva:
-        treino + validação + parte já observada do teste
-
-    Por padrão, a avaliação é feita em escala normalizada:
-        - scaler ajustado apenas no treino;
-        - validação e teste transformados com o scaler do treino;
-        - métricas calculadas na escala padronizada.
-
-    Isso corrige o problema do Weather aparecer com MSE muito alto
-    apenas por estar em escala original.
-    """
-    train, val, test = train_val_test_split_time_1d(
-        y,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-    )
-
+    scaler = None
     if normalize_eval:
-        train, val, test, _ = standardize_splits(train, val, test)
+        train, val, test, scaler = standardize_splits(train, val, test)
         metric_scale = "standardized"
     else:
         metric_scale = "original"
 
     hist_base = np.concatenate([train, val])
-
     if stride is None:
         stride = horizon
+    if stride <= 0 or horizon <= 0:
+        raise ValueError("stride e horizon devem ser positivos.")
 
-    n_test = len(test)
-    last_origin = n_test - horizon
-
+    last_origin = len(test) - horizon
     if last_origin < 0:
         raise ValueError(
-            f"Test set muito curto para horizon={horizon}. test_len={n_test}"
+            f"Test set muito curto para horizon={horizon}. test_len={len(test)}"
         )
-
     origins = list(range(0, last_origin + 1, stride))
-
     if max_origins is not None:
         origins = origins[:max_origins]
-
-    if len(origins) == 0:
-        raise ValueError(
-            f"Nenhuma origem válida para horizon={horizon}, test_len={n_test}."
-        )
+    if not origins:
+        raise ValueError("Nenhuma origem válida para avaliação.")
 
     print(
         f"{progress_prefix}[INFO] metric_scale={metric_scale} | "
-        f"train={len(train)} | val={len(val)} | test={len(test)} | "
-        f"origins={len(origins)}"
+        f"smape_scale=original | train={len(train)} | val={len(val)} | "
+        f"test={len(test)} | origins={len(origins)}"
     )
-
     preds_all: List[np.ndarray] = []
     trues_all: List[np.ndarray] = []
 
@@ -310,19 +239,17 @@ def rolling_origin_eval(
             seasonal_order=None,
             use_auto_arima=use_auto_arima,
         )
-
     elif model_kind == "SARIMA":
-        if sarima_light:
-            seasonal_order = (1, 0, 1, m_season)
-        else:
-            seasonal_order = (1, 1, 1, m_season)
-
+        seasonal_order = (
+            (1, 0, 1, m_season)
+            if sarima_light
+            else (1, 1, 1, m_season)
+        )
         cfg = SARIMAConfig(
             order=(1, 1, 1),
             seasonal_order=seasonal_order,
             use_auto_arima=use_auto_arima,
         )
-
     else:
         raise ValueError(f"Unknown model_kind={model_kind}")
 
@@ -335,7 +262,6 @@ def rolling_origin_eval(
                 y_pred = fit_forecast_arima_auto(y_hist, horizon)
             else:
                 y_pred = fit_forecast_arima_statsmodels(y_hist, horizon, cfg)
-
         else:
             if cfg.use_auto_arima:
                 y_pred = fit_forecast_sarima_auto(y_hist, horizon, m=m_season)
@@ -343,19 +269,20 @@ def rolling_origin_eval(
                 y_pred = fit_forecast_sarima_statsmodels(y_hist, horizon, cfg)
 
         y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
-
-        if y_pred.shape[0] < horizon:
-            pad_value = y_pred[-1] if len(y_pred) > 0 else y_hist[-1]
+        if len(y_pred) < horizon:
+            pad_value = y_pred[-1] if len(y_pred) else y_hist[-1]
             y_pred = np.pad(
                 y_pred,
-                pad_width=(0, horizon - y_pred.shape[0]),
+                pad_width=(0, horizon - len(y_pred)),
                 mode="constant",
                 constant_values=pad_value,
             )
-
-        if y_pred.shape[0] > horizon:
+        if len(y_pred) > horizon:
             y_pred = y_pred[:horizon]
-
+        if not np.isfinite(y_pred).all():
+            raise ValueError(
+                f"Previsões não finitas para {model_kind} na origem {origin}."
+            )
         preds_all.append(y_pred)
         trues_all.append(y_true)
 
@@ -364,11 +291,18 @@ def rolling_origin_eval(
         ):
             print(f"{progress_prefix}{model_kind} origin {idx}/{len(origins)} done")
 
-    y_pred_all = np.concatenate(preds_all, axis=0)
-    y_true_all = np.concatenate(trues_all, axis=0)
-
+    y_pred_all = np.concatenate(preds_all)
+    y_true_all = np.concatenate(trues_all)
     mse, mae = mse_mae(y_true_all, y_pred_all)
-    return Metrics(mse=mse, mae=mae)
+
+    if scaler is not None:
+        y_true_original = scaler.inverse_transform(y_true_all.reshape(-1, 1)).reshape(-1)
+        y_pred_original = scaler.inverse_transform(y_pred_all.reshape(-1, 1)).reshape(-1)
+    else:
+        y_true_original = y_true_all
+        y_pred_original = y_pred_all
+    smape = smape_percent(y_true_original, y_pred_original)
+    return Metrics(mse=mse, mae=mae, smape=smape)
 
 
 def run_single_experiment(args, model_kind: str) -> Metrics:
@@ -378,21 +312,15 @@ def run_single_experiment(args, model_kind: str) -> Metrics:
         target_col=args.target,
         data_dir=getattr(args, "data_dir", "./nixtla_cache"),
     )
-
     m = seasonal_period_for_group(args.data)
-
     stride = None if args.stride_mode == "H" else 1
-
     normalize_eval = getattr(args, "normalize_eval", True)
 
     print(
-        f"\n--- {model_kind} | data={args.data} | "
-        f"horizon={args.horizon} | seasonal_m={m} | "
-        f"stride={('H' if stride is None else stride)} | "
-        f"max_origins={args.max_origins} | "
-        f"normalize_eval={normalize_eval} ---"
+        f"\n--- {model_kind} | data={args.data} | horizon={args.horizon} | "
+        f"seasonal_m={m} | stride={('H' if stride is None else stride)} | "
+        f"max_origins={args.max_origins} | normalize_eval={normalize_eval} ---"
     )
-
     metrics = rolling_origin_eval(
         y=y,
         horizon=args.horizon,
@@ -408,8 +336,10 @@ def run_single_experiment(args, model_kind: str) -> Metrics:
         progress_prefix="  ",
         normalize_eval=normalize_eval,
     )
-
-    print(f"{model_kind}: MSE={metrics.mse:.6f} | MAE={metrics.mae:.6f}")
+    print(
+        f"{model_kind}: MSE={metrics.mse:.6f} | MAE={metrics.mae:.6f} "
+        f"| sMAPE={metrics.smape:.2f}%"
+    )
     return metrics
 
 
@@ -419,25 +349,19 @@ def run_benchmark(args) -> pd.DataFrame:
         if not args.run_all
         else ["ETTh1", "ETTh2", "ETTm1", "ETTm2", "Weather", "Exchange"]
     )
-
     horizons = [args.horizon] if not args.run_all_horizons else [96, 192, 336, 720]
-
     rows = []
-
     normalize_eval = getattr(args, "normalize_eval", True)
     metric_scale = "standardized" if normalize_eval else "original"
 
     for ds in datasets:
         args.data = ds
         m = seasonal_period_for_group(ds)
-
         for horizon in horizons:
             args.horizon = horizon
             print(f"\n==================== DATASET: {ds} | H={horizon} ====================")
-
             for model_kind in args.models:
                 metrics = run_single_experiment(args, model_kind=model_kind)
-
                 rows.append(
                     {
                         "Dataset": ds,
@@ -445,19 +369,18 @@ def run_benchmark(args) -> pd.DataFrame:
                         "Model": model_kind,
                         "MSE": metrics.mse,
                         "MAE": metrics.mae,
+                        "sMAPE": metrics.smape,
                         "seasonal_m": m,
                         "stride": args.stride_mode,
                         "max_origins": args.max_origins,
                         "auto_arima": args.use_auto_arima,
                         "sarima_light": args.sarima_light,
                         "metric_scale": metric_scale,
+                        "smape_scale": "original",
                     }
                 )
-
-    df_res = (
+    return (
         pd.DataFrame(rows)
         .sort_values(["Dataset", "Horizon", "Model"])
         .reset_index(drop=True)
     )
-
-    return df_res
