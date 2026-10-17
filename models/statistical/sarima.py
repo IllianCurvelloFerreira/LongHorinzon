@@ -165,7 +165,7 @@ def fit_forecast_sarima_statsmodels(
                     trend="n",
                     enforce_stationarity=cfg.enforce_stationarity,
                     enforce_invertibility=cfg.enforce_invertibility,
-                    simple_differencing=True,
+                    simple_differencing=False,
                     concentrate_scale=True,
                 )
             except TypeError:
