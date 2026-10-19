@@ -151,6 +151,14 @@ def main():
     print(f"MSE: {mse_mean:.6f} ± {mse_std:.6f}")
     print(f"MAE: {mae_mean:.6f} ± {mae_std:.6f}")
 
+    smape_mean = float(np.mean([m.smape for m in metrics_runs]))
+    smape_std = (
+        float(np.std([m.smape for m in metrics_runs], ddof=1))
+        if len(metrics_runs) > 1
+        else 0.0
+    )
+    print(f"sMAPE: {smape_mean:.2f}% ± {smape_std:.2f}%")
+
 
 if __name__ == "__main__":
     main()

@@ -24,14 +24,23 @@ from models.lstm.model import LSTMForecaster
 class Metrics:
     mse: float
     mae: float
+    smape: float
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: str) -> Metrics:
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str,
+    target_mean: float,
+    target_scale: float,
+) -> Metrics:
+    """MSE/MAE padronizados; sMAPE em unidades originais do alvo OT."""
     model.eval()
 
     mse_sum = 0.0
     mae_sum = 0.0
+    smape_sum = 0.0
     n = 0
 
     for x, y in loader:
@@ -42,11 +51,25 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str) -> Metrics:
 
         mse_sum += nn.functional.mse_loss(pred, y, reduction="sum").item()
         mae_sum += nn.functional.l1_loss(pred, y, reduction="sum").item()
+
+        # OT padronizada -> OT na escala original.
+        pred_original = pred * target_scale + target_mean
+        true_original = y * target_scale + target_mean
+        denominator = torch.abs(true_original) + torch.abs(pred_original)
+        point_smape = (
+            2.0 * torch.abs(pred_original - true_original)
+            / torch.clamp(denominator, min=1e-8)
+        )
+        smape_sum += point_smape.sum().item()
         n += y.numel()
+
+    if n == 0:
+        raise ValueError("DataLoader de avaliacao sem amostras.")
 
     return Metrics(
         mse=mse_sum / n,
         mae=mae_sum / n,
+        smape=100.0 * smape_sum / n,
     )
 
 
@@ -182,6 +205,9 @@ def build_loaders(args):
         val_series = scaler.transform(val_series)
         test_series = scaler.transform(test_series)
 
+        target_mean = float(scaler.mean_[0])
+        target_scale = float(scaler.scale_[0])
+
         # No univariado, PCA/PLS não são aplicados.
         train_ds = SlidingWindowDataset(
             train_series,
@@ -222,6 +248,10 @@ def build_loaders(args):
         train_series = scaler.fit_transform(train_series).astype(np.float32)
         val_series = scaler.transform(val_series).astype(np.float32)
         test_series = scaler.transform(test_series).astype(np.float32)
+
+        # Registrar scaler de OT antes de PCA/PLS mudar os indices.
+        target_mean = float(scaler.mean_[target_idx])
+        target_scale = float(scaler.scale_[target_idx])
 
         input_size = len(feature_cols)
 
@@ -294,13 +324,13 @@ def build_loaders(args):
         num_workers=args.num_workers,
     )
 
-    return train_loader, val_loader, test_loader, input_size
+    return train_loader, val_loader, test_loader, input_size, target_mean, target_scale
 
 
 def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     set_seed_fn(run_seed)
 
-    train_loader, val_loader, test_loader, input_size = build_loaders(args)
+    train_loader, val_loader, test_loader, input_size, target_mean, target_scale = build_loaders(args)
 
     model = LSTMForecaster(
         input_size=input_size,
@@ -342,13 +372,17 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
             train_losses.append(loss.item())
 
         train_loss = float(np.mean(train_losses)) if train_losses else np.nan
-        val_metrics = evaluate(model, val_loader, device)
+        val_metrics = evaluate(
+            model, val_loader, device,
+            target_mean=target_mean, target_scale=target_scale,
+        )
 
         print(
             f"Epoch {epoch:02d} | "
             f"Train={train_loss:.6f} | "
             f"Val MSE={val_metrics.mse:.6f} | "
-            f"Val MAE={val_metrics.mae:.6f}"
+            f"Val MAE={val_metrics.mae:.6f} | "
+            f"Val sMAPE={val_metrics.smape:.2f}%"
         )
 
         if val_metrics.mse < best_val:
@@ -361,7 +395,13 @@ def run_experiment(args, run_seed: int, device: str, set_seed_fn):
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    test_metrics = evaluate(model, test_loader, device)
-    print(f"TEST | MSE={test_metrics.mse:.6f} | MAE={test_metrics.mae:.6f}")
+    test_metrics = evaluate(
+        model, test_loader, device,
+        target_mean=target_mean, target_scale=target_scale,
+    )
+    print(
+        f"TEST | MSE={test_metrics.mse:.6f} | "
+        f"MAE={test_metrics.mae:.6f} | sMAPE={test_metrics.smape:.2f}%"
+    )
 
     return test_metrics
