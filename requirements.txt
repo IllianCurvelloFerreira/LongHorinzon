@@ -9,6 +9,7 @@ torch
 
 # Time Series / Dataset
 datasetsforecast
+fcompdata
 
 # Statistical models
 statsmodels
