@@ -237,11 +237,11 @@ def main():
 
     print("\n===== RESULTADOS FINAIS =====")
 
-    print(
-        df.groupby("model")[
-            ["MAE_original", "sMAPE_pct", "MASE"]
-        ].mean().to_string()
-    )
+    resumo = df.groupby("model")[
+    ["MSE_original", "MAE_original", "sMAPE_pct", "MASE"]
+        ].mean()
+
+    print(resumo.round(6).to_string())
 
     print(f"\nResultados salvos em: {output}")
 
