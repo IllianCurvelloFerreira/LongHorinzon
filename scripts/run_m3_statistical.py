@@ -188,7 +188,7 @@ def main():
                         SARIMAConfig(
                             order=(1, 1, 1),
                             seasonal_order=(1, 0, 1, m),
-                            maxiter=25,
+                            maxiter=200,
                         ),
                     )
 
