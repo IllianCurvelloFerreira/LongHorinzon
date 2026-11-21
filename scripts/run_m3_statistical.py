@@ -556,6 +556,22 @@ def main() -> None:
         exist_ok=True,
     )
 
+    columns = [
+    "series_id",
+    "group",
+    "model",
+    "horizon",
+    "train_length",
+    "category",
+    "description",
+    "MSE_original",
+    "MAE_original",
+    "sMAPE_pct",
+    "MASE",
+    ]
+
+    df = df.reindex(columns=columns)
+
     df.to_csv(
         output,
         index=False,
